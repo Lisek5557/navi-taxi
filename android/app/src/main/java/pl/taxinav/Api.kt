@@ -18,6 +18,8 @@ object Prefs {
     fun trafficLayer(ctx: Context) = ctx.getSharedPreferences(FILE, 0).getBoolean("trafficLayer", true)
     fun save(ctx: Context, server: String, key: String) =
         ctx.getSharedPreferences(FILE, 0).edit().putString("server", server.trim().trimEnd('/')).putString("key", key.trim()).apply()
+    fun mapTheme(ctx: Context) = ctx.getSharedPreferences(FILE, 0).getString("mapTheme", "auto")!!
+    fun setMapTheme(ctx: Context, t: String) = ctx.getSharedPreferences(FILE, 0).edit().putString("mapTheme", t).apply()
     fun setTrafficLayer(ctx: Context, on: Boolean) =
         ctx.getSharedPreferences(FILE, 0).edit().putBoolean("trafficLayer", on).apply()
 }

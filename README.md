@@ -21,6 +21,7 @@ Android + własny serwer tras na Twoim komputerze (OpenStreetMap Polska).
 - **Korki**: trasa kolorowana na zielono, pomarańczowo, czerwono i bordowo, warstwa korków na mapie (przycisk 🚦), co 3 minuty odświeżenie i zmiana trasy, jeśli nowa jest szybsza o ≥2 min.
 - **Przeliczanie** po zjechaniu z trasy (3 odczyty GPS dalej niż 40 m), z uwzględnieniem kierunku jazdy (bez propozycji zawracania w miejscu).
 - **Własna baza adresów** województwa kujawsko-pomorskiego (320 tys. adresów z OSM, `server/data/addresses.tsv`): wyszukiwanie w kilka ms, bez polskich znaków, z literówkami i skrótami („jagielonska 10 byd”), najbliższe wyniki pierwsze, trasa prosto pod budynek. Miejsca z nazwą (dworce, szpitale, galerie) i reszta Polski: publiczny Photon.
+- **Mapa dla taksówkarza** (styl z serwera `/style/day.json`, `/style/night.json`): wyraźne ulice z obrysem, duże nazwy ulic, numery budynków od przybliżenia 16, strzałki jednokierunkowych, miejscowości i dzielnice, ważne miejsca (szpitale, dworce, przystanki, hotele, policja). Tryb nocny automatycznie 19–7 albo ręcznie (przycisk ◐). Trasa rysuje się pod napisami.
 - Przytrzymanie palca na mapie, żeby wybrać cel.
 
 ## 1. Serwer (Windows)

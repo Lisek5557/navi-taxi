@@ -49,10 +49,12 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.module.http.HttpRequestUtil
 import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.layers.Layer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.RasterLayer
+import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.android.style.sources.RasterSource
 import org.maplibre.android.style.sources.TileSet
@@ -67,8 +69,8 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
 
     companion object {
-        // Darmowe kafle wektorowe OpenStreetMap, bez klucza (można później hostować samemu).
-        const val MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty"
+        // Styl zapasowy, gdy serwer TaxiNav jest niedostępny (kafle OpenStreetMap, bez klucza).
+        const val FALLBACK_STYLE = "https://tiles.openfreemap.org/styles/liberty"
         const val REROUTE_MIN_INTERVAL_MS = 8_000L
         const val TRAFFIC_REFRESH_MS = 180_000L
     }
@@ -92,6 +94,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cancelButton: MaterialButton
     private lateinit var trafficButton: MaterialButton
     private lateinit var muteButton: MaterialButton
+    private lateinit var themeButton: MaterialButton
+    private var loadedStyleUrl: String? = null
+    private var firstStyle = true
+    private var lastThemeCheck = 0L
     private lateinit var progress: ProgressBar
 
     private val fused by lazy { LocationServices.getFusedLocationProviderClient(this) }
@@ -133,12 +139,11 @@ class MainActivity : AppCompatActivity() {
             m.uiSettings.isCompassEnabled = true
             m.uiSettings.isAttributionEnabled = true
             m.cameraPosition = CameraPosition.Builder().target(LatLng(52.2297, 21.0122)).zoom(11.0).build()
-            m.setStyle(Style.Builder().fromUri(MAP_STYLE)) { s ->
-                style = s
-                setupLayers(s)
-                enableLocationComponent(s)
-                ensureLocationPermission()
+            // Styl TaxiNav z serwera; gdy się nie wczyta — styl zapasowy.
+            m.addOnDidFailLoadingMapListener { _ ->
+                if (loadedStyleUrl != FALLBACK_STYLE) loadStyle(FALLBACK_STYLE)
             }
+            loadStyle(desiredStyleUrl())
             m.addOnMapLongClickListener { p ->
                 if (!navigating) previewTo(LatLon(p.latitude, p.longitude))
                 true
@@ -177,6 +182,15 @@ class MainActivity : AppCompatActivity() {
         cancelButton = findViewById(R.id.cancelButton)
         trafficButton = findViewById(R.id.trafficButton)
         muteButton = findViewById(R.id.muteButton)
+        themeButton = findViewById(R.id.themeButton)
+        updateThemeButton()
+        themeButton.setOnClickListener {
+            val next = when (Prefs.mapTheme(this)) { "auto" -> "day"; "day" -> "night"; else -> "auto" }
+            Prefs.setMapTheme(this, next)
+            updateThemeButton()
+            toast(when (next) { "day" -> "Mapa: dzień"; "night" -> "Mapa: noc"; else -> "Mapa: automatycznie (noc 19–7)" })
+            reloadStyleIfNeeded()
+        }
         progress = findViewById(R.id.progress)
 
         findViewById<ImageButton>(R.id.settingsButton).setOnClickListener {
@@ -211,20 +225,23 @@ class MainActivity : AppCompatActivity() {
     private fun setupLayers(s: Style) {
         s.addSource(GeoJsonSource("alt-src"))
         s.addSource(GeoJsonSource("route-src"))
-        s.addLayer(LineLayer("alt-line", "alt-src").withProperties(
+        // Trasa pod napisami (nazwy ulic i numery domów zostają widoczne).
+        val below = s.layers.firstOrNull { it is SymbolLayer }?.id
+        val add = { layer: Layer -> if (below != null) s.addLayerBelow(layer, below) else s.addLayer(layer) }
+        add(LineLayer("alt-line", "alt-src").withProperties(
             PropertyFactory.lineColor("#8A93A3"),
             PropertyFactory.lineWidth(6f),
             PropertyFactory.lineOpacity(0.7f),
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
         ))
-        s.addLayer(LineLayer("route-casing", "route-src").withProperties(
+        add(LineLayer("route-casing", "route-src").withProperties(
             PropertyFactory.lineColor("#FFFFFF"),
             PropertyFactory.lineWidth(11f),
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
         ))
-        s.addLayer(LineLayer("route-line", "route-src").withProperties(
+        add(LineLayer("route-line", "route-src").withProperties(
             PropertyFactory.lineColor(
                 Expression.match(
                     Expression.get("level"), Expression.color(color(R.color.route_unknown)),
@@ -332,6 +349,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun onLocation(loc: Location) {
         lastLocation = loc
+        if (SystemClock.elapsedRealtime() - lastThemeCheck > 60_000) {
+            lastThemeCheck = SystemClock.elapsedRealtime()
+            reloadStyleIfNeeded() // automatyczne przełączenie dzień/noc
+        }
         map?.locationComponent?.takeIf { it.isLocationComponentActivated }?.forceLocationUpdate(loc)
         val e = engine ?: return
         if (!navigating) return
@@ -539,6 +560,43 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume(); mapView.onResume()
         style?.let { updateTrafficLayer(it) } // po zmianie ustawień
+        reloadStyleIfNeeded()
+    }
+
+    // ---------- Styl mapy (dzień / noc) ----------
+
+    private fun currentTheme(): String = when (val t = Prefs.mapTheme(this)) {
+        "day", "night" -> t
+        else -> {
+            val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+            if (h >= 19 || h < 7) "night" else "day"
+        }
+    }
+
+    private fun desiredStyleUrl(): String {
+        val server = Prefs.server(this)
+        return if (server.isBlank()) FALLBACK_STYLE else "$server/style/${currentTheme()}.json"
+    }
+
+    private fun updateThemeButton() {
+        themeButton.text = when (Prefs.mapTheme(this)) { "day" -> "☀"; "night" -> "☾"; else -> "◐" }
+    }
+
+    private fun reloadStyleIfNeeded() {
+        val want = desiredStyleUrl()
+        if (map != null && loadedStyleUrl != null && want != loadedStyleUrl) loadStyle(want)
+    }
+
+    private fun loadStyle(url: String) {
+        val m = map ?: return
+        loadedStyleUrl = url
+        m.setStyle(Style.Builder().fromUri(url)) { s ->
+            style = s
+            setupLayers(s)
+            enableLocationComponent(s)
+            if (firstStyle) { firstStyle = false; ensureLocationPermission() }
+            routeResp?.let { drawRoute(it) }
+        }
     }
     override fun onPause() { super.onPause(); mapView.onPause() }
     override fun onStop() { super.onStop(); mapView.onStop() }

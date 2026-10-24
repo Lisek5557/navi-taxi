@@ -112,6 +112,11 @@
         android:orientation="vertical">
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/themeButton"
+            style="@style/RoundButton"
+            android:text="◐" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/trafficButton"
             style="@style/RoundButton"
             android:text="🚦" />

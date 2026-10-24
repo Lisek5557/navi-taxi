@@ -110,3 +110,19 @@ test('API: /setup pokazuje QR z adresem tunelu (z metryk cloudflared) i kluczem'
     assert.ok(html.includes('sekret'));
   } finally { srv.close(); }
 });
+
+test('API: /style/day.json i /style/night.json bez klucza', async () => {
+  const srv = createServer({ apiToken: 'sekret', valhallaUrl: 'http://v' }, { fetchImpl: async () => new Response('{}', { status: 404 }), geocoder: null });
+  await new Promise((r) => srv.listen(0, r));
+  try {
+    const base = `http://127.0.0.1:${srv.address().port}`;
+    for (const t of ['day', 'night']) {
+      const s = await (await fetch(`${base}/style/${t}.json`)).json();
+      assert.equal(s.version, 8);
+      const ids = s.layers.map((l) => l.id);
+      for (const id of ['housenumber', 'road-name-major', 'road-name-minor', 'place-city', 'poi-label', 'oneway']) assert.ok(ids.includes(id), id);
+      assert.equal(new Set(ids).size, ids.length, 'unikalne id warstw');
+    }
+    assert.equal((await fetch(`${base}/style/x.json`)).status, 401);
+  } finally { srv.close(); }
+});

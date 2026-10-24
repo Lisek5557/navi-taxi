@@ -4,6 +4,7 @@ import { makeRouter } from './lib/routing.js';
 import { makeTraffic } from './lib/traffic.js';
 import { loadGeocoder } from './lib/geocoder.js';
 import { qrSvg } from './lib/qr.js';
+import { buildStyle } from './lib/style.js';
 
 export function createServer(cfg, deps = {}) {
   const fetchImpl = deps.fetchImpl || fetch;
@@ -13,6 +14,7 @@ export function createServer(cfg, deps = {}) {
     tolerancePct: cfg.tolerancePct, maxExtraSec: cfg.maxExtraSec,
   });
   const tileCache = new Map(); // "z/x/y" -> {t, buf}
+  const styles = { day: buildStyle('day'), night: buildStyle('night') };
   const geocoder = deps.geocoder !== undefined ? deps.geocoder : loadGeocoder(cfg.addressFile);
   if (geocoder) console.log(`Lokalna baza adresów: ${geocoder.size} adresów`);
 
@@ -65,6 +67,14 @@ export function createServer(cfg, deps = {}) {
           valhalla = r.ok;
         } catch {}
         return send(res, 200, { ok: true, valhalla, traffic: !!cfg.tomtomKey, addresses: geocoder ? geocoder.size : 0 });
+      }
+
+      // Styl mapy (publiczny — bez danych prywatnych; kafle i czcionki z OpenFreeMap).
+      const st = url.pathname.match(/^\/style\/(day|night)\.json$/);
+      if (req.method === 'GET' && st) {
+        const body = JSON.stringify(styles[st[1]]);
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'max-age=300' });
+        return res.end(body);
       }
 
       // Autoryzacja: serwer jest wystawiony do internetu przez tunel.
