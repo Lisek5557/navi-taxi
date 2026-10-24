@@ -64,4 +64,13 @@ Write-Host "================================================================" -F
 Write-Host ""
 Write-Host "Pierwsze uruchomienie: Valhalla pobiera mape Polski (~1.9 GB) i buduje kafle (30-90 min)."
 Write-Host "Postep: docker compose logs -f valhalla     Stan: .\status.ps1"
+
+# 6. Strona z kodem QR do zeskanowania telefonem
+$setup = "http://localhost:8080/setup?k=$token"
+if ($lan) { $setup += "&lan=" + [uri]::EscapeDataString("http://${lan}:8080") }
+for ($i = 0; $i -lt 15; $i++) {
+    try { Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:8080/health" -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep 2 }
+}
+Write-Host "Otwieram strone z kodem QR (qr.bat otwiera ja ponownie)..." -ForegroundColor Cyan
+Start-Process $setup
 Read-Host "Enter aby zamknac"

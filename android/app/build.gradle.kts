@@ -11,15 +11,28 @@ android {
         applicationId = "pl.taxinav"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+    }
+
+    // Stały klucz testowy w repo: każda wersja z GitHuba instaluje się na poprzednią.
+    // Przed publikacją w Google Play zastąp go prywatnym kluczem spoza repozytorium.
+    signingConfigs {
+        create("taxinavTest") {
+            storeFile = file("taxinav-test.jks")
+            storePassword = "taxinav"
+            keyAlias = "taxinav"
+            keyPassword = "taxinav"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("taxinavTest")
+        }
         release {
             isMinifyEnabled = false
-            // Testowo podpisujemy kluczem debug, żeby APK dało się od razu zainstalować.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("taxinavTest")
         }
     }
     compileOptions {
@@ -39,6 +52,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.maplibre.gl:android-sdk:11.8.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")

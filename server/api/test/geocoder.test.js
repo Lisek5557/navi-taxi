@@ -94,3 +94,19 @@ test('API: lokalne adresy najpierw, Photon dokłada miejsca bez duplikatów', as
     assert.equal(h.addresses, rows.length);
   } finally { srv.close(); }
 });
+
+test('API: /setup pokazuje QR z adresem tunelu (z metryk cloudflared) i kluczem', async () => {
+  const fetchImpl = async (u) => String(u).endsWith('/quicktunnel')
+    ? Response.json({ hostname: 'abc-def.trycloudflare.com' }) : new Response('{}', { status: 404 });
+  const srv = createServer({ apiToken: 'sekret', tunnelMetricsUrl: 'http://tunnel:2000', valhallaUrl: 'http://v' }, { fetchImpl, geocoder: null });
+  await new Promise((r) => srv.listen(0, r));
+  try {
+    const base = `http://127.0.0.1:${srv.address().port}`;
+    assert.equal((await fetch(`${base}/setup`)).status, 401);
+    const html = await (await fetch(`${base}/setup?k=sekret&lan=http://192.168.1.5:8080`)).text();
+    assert.ok(html.includes('https://abc-def.trycloudflare.com'));
+    assert.ok(html.includes('http://192.168.1.5:8080'));
+    assert.equal((html.match(/<svg/g) || []).length, 2);
+    assert.ok(html.includes('sekret'));
+  } finally { srv.close(); }
+});

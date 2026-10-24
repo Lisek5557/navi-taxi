@@ -18,6 +18,25 @@
             android:textSize="26sp"
             android:textStyle="bold" />
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/scanButton"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:layout_marginTop="20dp"
+            android:backgroundTint="@color/accent"
+            android:text="@string/scan_qr"
+            android:textColor="@android:color/black"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/scan_hint"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp" />
+
         <TextView
             style="@style/Label"
             android:text="@string/server_url" />
@@ -66,9 +85,9 @@
             android:layout_width="match_parent"
             android:layout_height="60dp"
             android:layout_marginTop="16dp"
-            android:backgroundTint="@color/accent"
+            android:backgroundTint="#FF3A404C"
             android:text="@string/save"
-            android:textColor="@android:color/black"
+            android:textColor="@color/text"
             android:textStyle="bold" />
     </LinearLayout>
 </ScrollView>

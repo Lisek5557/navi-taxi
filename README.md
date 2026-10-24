@@ -34,7 +34,7 @@ Android + własny serwer tras na Twoim komputerze (OpenStreetMap Polska).
 4. **Pierwszy start trwa 30–90 min**: Valhalla pobiera mapę Polski (~1,9 GB) i buduje kafle (~10 GB na dysku).
    Postęp: `docker compose logs -f valhalla`. Stan: `status.ps1`.
 
-Skrypty: `start.ps1` · `status.ps1` · `tunnel-url.ps1` (aktualny adres tunelu) · `stop.ps1`.
+Skróty (dwuklik): `start.bat` · `qr.bat` (kod QR dla telefonów) · `status.bat` · `tunnel-url.bat` · `stop.bat`.
 
 > Adres `*.trycloudflare.com` **zmienia się po każdym restarcie**. Stały adres: darmowe konto Cloudflare +
 > własna domena → Zero Trust → Tunnels → token → zmiana `command` w `docker-compose.yml` (opis w pliku).
@@ -44,7 +44,8 @@ Skrypty: `start.ps1` · `status.ps1` · `tunnel-url.ps1` (aktualny adres tunelu)
 1. Android Studio → **Open** → folder `android`. Poczekaj na Gradle Sync (pobierze biblioteki).
 2. Telefon: włącz *Opcje programisty → Debugowanie USB*, podłącz kablem, kliknij ▶ **Run**.
    Albo **Build → Build APK(s)**, a plik `app/build/outputs/apk/debug/app-debug.apk` wyślij kierowcom.
-3. W aplikacji: ⚙ **Ustawienia** → adres serwera i klucz API ze `start.ps1` → **Sprawdź połączenie**.
+3. W aplikacji: ⚙ **Ustawienia** → **Skanuj kod QR** i zeskanuj stronę, którą otwiera `start.bat` (ponownie: `qr.bat`).
+   Możesz też zeskanować kod zwykłym aparatem telefonu, wtedy TaxiNav otworzy się z gotowymi ustawieniami.
 4. Polski głos: Ustawienia telefonu → Zamiana tekstu na mowę → Google, język polski (pobierz dane głosu).
 
 ## Aktualizacja bazy adresów
