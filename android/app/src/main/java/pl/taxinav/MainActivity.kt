@@ -2,13 +2,23 @@ package pl.taxinav
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.PictureInPictureParams
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.location.Location
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Rational
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -22,6 +32,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -31,11 +42,15 @@ import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.material.button.MaterialButton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import org.json.JSONArray
+import org.json.JSONObject
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -62,9 +77,12 @@ import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
@@ -73,6 +91,14 @@ class MainActivity : AppCompatActivity() {
         const val FALLBACK_STYLE = "https://tiles.openfreemap.org/styles/liberty"
         const val REROUTE_MIN_INTERVAL_MS = 8_000L
         const val TRAFFIC_REFRESH_MS = 180_000L
+        val REPORT_ICONS = mapOf(
+            "police" to Pair("🚓", 0xFF2F7DE1.toInt()),
+            "accident" to Pair("💥", 0xFFE5482F.toInt()),
+            "hazard" to Pair("⚠", 0xFFF5A623.toInt()),
+            "closed" to Pair("⛔", 0xFF8E1B1B.toInt()),
+        )
+        val REPORT_LABELS = listOf("police" to "🚓  Kontrola", "accident" to "💥  Wypadek", "hazard" to "⚠  Utrudnienie", "closed" to "⛔  Zamknięta ulica")
+        val LIMIT_VALUES = listOf(10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 140)
     }
 
     private lateinit var mapView: MapView
@@ -83,10 +109,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var searchPanel: LinearLayout
     private lateinit var searchInput: EditText
     private lateinit var results: ListView
+    private lateinit var favRow: LinearLayout
     private lateinit var navBanner: LinearLayout
     private lateinit var arrow: TextView
     private lateinit var distToNext: TextView
     private lateinit var instruction: TextView
+    private lateinit var lanesRow: LinearLayout
     private lateinit var bottomPanel: LinearLayout
     private lateinit var summary: TextView
     private lateinit var summaryDetail: TextView
@@ -95,34 +123,76 @@ class MainActivity : AppCompatActivity() {
     private lateinit var trafficButton: MaterialButton
     private lateinit var muteButton: MaterialButton
     private lateinit var themeButton: MaterialButton
+    private lateinit var gmapsButton: MaterialButton
+    private lateinit var routeOptions: LinearLayout
+    private lateinit var stopsRow: LinearLayout
+    private lateinit var stopsInfo: TextView
+    private lateinit var editStopsButton: MaterialButton
+    private lateinit var addStopButton: MaterialButton
+    private lateinit var sideButtons: LinearLayout
+    private lateinit var speedBox: LinearLayout
+    private lateinit var speedLimitView: TextView
+    private lateinit var currentSpeedView: TextView
+    private lateinit var voteBar: LinearLayout
+    private lateinit var voteText: TextView
+    private lateinit var progress: ProgressBar
+    private val optViews = HashMap<String, TextView>()
+
     private var loadedStyleUrl: String? = null
     private var firstStyle = true
     private var lastThemeCheck = 0L
-    private lateinit var progress: ProgressBar
 
     private val fused by lazy { LocationServices.getFusedLocationProviderClient(this) }
     private var lastLocation: Location? = null
+
+    // Cel, przystanki, trasa
     private var destination: LatLon? = null
+    private var destPlace: Place? = null
+    private val stops = ArrayList<Place>()
+    private var addingStop = false
+    private var pendingPlace: Place? = null
     private var routeResp: RouteResponse? = null
+    private var routeMode = "optimal"
+
+    // Nawigacja
     private var engine: NavigationEngine? = null
     private var lastNavState: NavState? = null
     private var navigating = false
     private var rerouting = false
     private var lastRerouteAt = 0L
     private var refreshJob: Job? = null
+    private var lastNotifAt = 0L
+
+    // Wyszukiwanie
     private var placeResults: List<Place> = emptyList()
-    private var routeMode = "optimal"
     private var suggestJob: Job? = null
     private var suppressWatcher = false
-    private lateinit var gmapsButton: MaterialButton
-    private lateinit var routeOptions: LinearLayout
-    private val optViews = HashMap<String, TextView>()
+
+    // Zgłoszenia
+    private var reports: List<Report> = emptyList()
+    private val alertedReports = HashSet<Int>()
+    private val votedReports = HashSet<Int>()
+    private var voteFor: Report? = null
+
+    // Ograniczenia prędkości
+    private var freeLimit: Int? = null
+    private var lastLimitPoll = 0L
+    private val recentPts = ArrayDeque<LatLon>()
+    private var overSince = 0L
+    private var lastOverWarn = 0L
+    private val tone by lazy { runCatching { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80) }.getOrNull() }
+
+    // Próbki prędkości (korki od kierowców)
+    private var samples = JSONArray()
+    private var lastSampleAt = 0L
+    private var lastFlushAt = 0L
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         if (granted[Manifest.permission.ACCESS_FINE_LOCATION] == true || granted[Manifest.permission.ACCESS_COARSE_LOCATION] == true) {
             startLocation()
         } else toast(getString(R.string.need_location))
     }
+    private val notifLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -144,7 +214,7 @@ class MainActivity : AppCompatActivity() {
             map = m
             m.uiSettings.isCompassEnabled = true
             m.uiSettings.isAttributionEnabled = true
-            m.cameraPosition = CameraPosition.Builder().target(LatLng(52.2297, 21.0122)).zoom(11.0).build()
+            m.cameraPosition = CameraPosition.Builder().target(LatLng(53.1235, 18.0084)).zoom(11.0).build()
             // Styl TaxiNav z serwera; gdy się nie wczyta — styl zapasowy.
             mapView.addOnDidFailLoadingMapListener {
                 if (loadedStyleUrl != FALLBACK_STYLE) loadStyle(FALLBACK_STYLE)
@@ -155,14 +225,21 @@ class MainActivity : AppCompatActivity() {
                 false
             }
             m.addOnMapLongClickListener { p ->
-                if (!navigating) previewTo(LatLon(p.latitude, p.longitude))
+                if (!navigating) pickPlace(Place("Punkt na mapie", "", p.latitude, p.longitude))
                 true
             }
         }
 
         if (Prefs.server(this).isBlank()) {
             startActivity(Intent(this, SettingsActivity::class.java))
-        } else toast(getString(R.string.long_press_hint))
+        }
+        handleExternalIntent(intent)
+        startReportsLoop()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleExternalIntent(intent)
     }
 
     /** MapLibre pobiera kafle korków z naszego serwera — dokładamy nagłówek z kluczem. */
@@ -181,10 +258,12 @@ class MainActivity : AppCompatActivity() {
         searchPanel = findViewById(R.id.searchPanel)
         searchInput = findViewById(R.id.searchInput)
         results = findViewById(R.id.results)
+        favRow = findViewById(R.id.favRow)
         navBanner = findViewById(R.id.navBanner)
         arrow = findViewById(R.id.arrow)
         distToNext = findViewById(R.id.distToNext)
         instruction = findViewById(R.id.instruction)
+        lanesRow = findViewById(R.id.lanesRow)
         bottomPanel = findViewById(R.id.bottomPanel)
         summary = findViewById(R.id.summary)
         summaryDetail = findViewById(R.id.summaryDetail)
@@ -193,6 +272,25 @@ class MainActivity : AppCompatActivity() {
         trafficButton = findViewById(R.id.trafficButton)
         muteButton = findViewById(R.id.muteButton)
         themeButton = findViewById(R.id.themeButton)
+        gmapsButton = findViewById(R.id.gmapsButton)
+        routeOptions = findViewById(R.id.routeOptions)
+        stopsRow = findViewById(R.id.stopsRow)
+        stopsInfo = findViewById(R.id.stopsInfo)
+        editStopsButton = findViewById(R.id.editStopsButton)
+        addStopButton = findViewById(R.id.addStopButton)
+        sideButtons = findViewById(R.id.sideButtons)
+        speedBox = findViewById(R.id.speedBox)
+        speedLimitView = findViewById(R.id.speedLimit)
+        currentSpeedView = findViewById(R.id.currentSpeed)
+        voteBar = findViewById(R.id.voteBar)
+        voteText = findViewById(R.id.voteText)
+        progress = findViewById(R.id.progress)
+        optViews["optimal"] = findViewById(R.id.optOptimal)
+        optViews["fastest"] = findViewById(R.id.optFastest)
+        optViews["shortest"] = findViewById(R.id.optShortest)
+        routeMode = Prefs.routeMode(this)
+        for ((mode, v) in optViews) v.setOnClickListener { selectRouteMode(mode) }
+
         updateThemeButton()
         themeButton.setOnClickListener {
             val next = when (Prefs.mapTheme(this)) { "auto" -> "day"; "day" -> "night"; else -> "auto" }
@@ -201,15 +299,19 @@ class MainActivity : AppCompatActivity() {
             toast(when (next) { "day" -> "Mapa: dzień"; "night" -> "Mapa: noc"; else -> "Mapa: automatycznie (noc 19–7)" })
             reloadStyleIfNeeded()
         }
-        progress = findViewById(R.id.progress)
-        gmapsButton = findViewById(R.id.gmapsButton)
-        routeOptions = findViewById(R.id.routeOptions)
-        optViews["optimal"] = findViewById(R.id.optOptimal)
-        optViews["fastest"] = findViewById(R.id.optFastest)
-        optViews["shortest"] = findViewById(R.id.optShortest)
-        routeMode = Prefs.routeMode(this)
-        for ((mode, v) in optViews) v.setOnClickListener { selectRouteMode(mode) }
         gmapsButton.setOnClickListener { openInGoogleMaps() }
+        addStopButton.setOnClickListener {
+            addingStop = true
+            toast("Wyszukaj albo przytrzymaj palec na mapie — dodam przystanek przed celem")
+            searchInput.requestFocus()
+            (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(searchInput, 0)
+        }
+        editStopsButton.setOnClickListener { editStops() }
+        findViewById<MaterialButton>(R.id.reportButton).setOnClickListener { reportDialog() }
+        speedLimitView.setOnClickListener { reportLimitDialog() }
+        currentSpeedView.setOnClickListener { reportLimitDialog() }
+        findViewById<MaterialButton>(R.id.voteYes).setOnClickListener { vote(true) }
+        findViewById<MaterialButton>(R.id.voteNo).setOnClickListener { vote(false) }
 
         // Podpowiedzi podczas pisania (z opóźnieniem 300 ms) i ostatnie wyszukiwania przy pustym polu.
         searchInput.addTextChangedListener(object : android.text.TextWatcher {
@@ -229,7 +331,6 @@ class MainActivity : AppCompatActivity() {
         searchInput.setOnFocusChangeListener { _, hasFocus ->
             if (hasFocus && searchInput.text.isNullOrBlank()) showRecent()
         }
-
         findViewById<ImageButton>(R.id.settingsButton).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
@@ -241,11 +342,9 @@ class MainActivity : AppCompatActivity() {
             suggestJob?.cancel()
             results.visibility = View.GONE
             hideKeyboard()
-            suppressWatcher = true
-            searchInput.setText(p.label)
-            suppressWatcher = false
+            setSearchText(if (addingStop) "" else p.label)
             Prefs.addRecent(this, p)
-            previewTo(LatLon(p.lat, p.lon))
+            pickPlace(p)
         }
         startButton.setOnClickListener { if (navigating) stopNavigation() else startNavigation() }
         cancelButton.setOnClickListener { clearRoute() }
@@ -259,6 +358,7 @@ class MainActivity : AppCompatActivity() {
             muteButton.text = if (voice.muted) "🔇" else "🔊"
         }
         findViewById<MaterialButton>(R.id.recenterButton).setOnClickListener { recenter() }
+        renderFavorites()
     }
 
     // ---------- Mapa ----------
@@ -266,6 +366,8 @@ class MainActivity : AppCompatActivity() {
     private fun setupLayers(s: Style) {
         s.addSource(GeoJsonSource("alt-src"))
         s.addSource(GeoJsonSource("route-src"))
+        s.addSource(GeoJsonSource("stops-src"))
+        s.addSource(GeoJsonSource("reports-src"))
         // Trasa pod napisami (nazwy ulic i numery domów zostają widoczne).
         val below = s.layers.firstOrNull { it is SymbolLayer }?.id
         val add = { layer: Layer -> if (below != null) s.addLayerBelow(layer, below) else s.addLayer(layer) }
@@ -296,7 +398,43 @@ class MainActivity : AppCompatActivity() {
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
         ))
+        // Ikony zgłoszeń i przystanków (rysowane z emoji, bo czcionki mapy ich nie mają).
+        for ((type, v) in REPORT_ICONS) s.addImage("rep-$type", iconBitmap(v.first, v.second))
+        for (i in 1..9) s.addImage("stop-$i", iconBitmap("$i", 0xFF1B6B3A.toInt()))
+        s.addImage("stop-dest", iconBitmap("🏁", 0xFF1B6B3A.toInt()))
+        s.addLayer(SymbolLayer("stops-layer", "stops-src").withProperties(
+            PropertyFactory.iconImage(Expression.get("icon")),
+            PropertyFactory.iconAllowOverlap(true),
+            PropertyFactory.iconIgnorePlacement(true),
+        ))
+        s.addLayer(SymbolLayer("reports-layer", "reports-src").withProperties(
+            PropertyFactory.iconImage(Expression.get("icon")),
+            PropertyFactory.iconAllowOverlap(true),
+            PropertyFactory.iconSize(Expression.interpolate(Expression.linear(), Expression.zoom(),
+                Expression.stop(10, 0.6f), Expression.stop(16, 1.0f))),
+        ))
         updateTrafficLayer(s)
+        drawReports()
+        drawStops()
+    }
+
+    private fun iconBitmap(text: String, bg: Int): Bitmap {
+        val d = resources.displayMetrics.density
+        val size = (40 * d).toInt()
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.color = 0xFFFFFFFF.toInt()
+        c.drawCircle(size / 2f, size / 2f, size / 2f, p)
+        p.color = bg
+        c.drawCircle(size / 2f, size / 2f, size / 2f - 3 * d, p)
+        p.color = 0xFFFFFFFF.toInt()
+        p.textSize = 20 * d
+        p.textAlign = Paint.Align.CENTER
+        p.isFakeBoldText = true
+        val y = size / 2f - (p.descent() + p.ascent()) / 2
+        c.drawText(text, size / 2f, y, p)
+        return bmp
     }
 
     private fun updateTrafficLayer(s: Style) {
@@ -323,6 +461,7 @@ class MainActivity : AppCompatActivity() {
         if (resp == null) {
             routeSrc?.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
             altSrc?.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
+            drawStops()
             return
         }
         val r = resp.chosen
@@ -339,6 +478,24 @@ class MainActivity : AppCompatActivity() {
             Feature.fromGeometry(LineString.fromLngLats(a.points.map { Point.fromLngLat(it.lon, it.lat) }))
         }
         altSrc?.setGeoJson(FeatureCollection.fromFeatures(alts))
+        drawStops()
+    }
+
+    private fun drawStops() {
+        val src = style?.getSourceAs<GeoJsonSource>("stops-src") ?: return
+        val f = ArrayList<Feature>()
+        stops.forEachIndexed { i, p ->
+            f += Feature.fromGeometry(Point.fromLngLat(p.lon, p.lat)).also { it.addStringProperty("icon", "stop-${minOf(i + 1, 9)}") }
+        }
+        destination?.let { d -> f += Feature.fromGeometry(Point.fromLngLat(d.lon, d.lat)).also { it.addStringProperty("icon", "stop-dest") } }
+        src.setGeoJson(FeatureCollection.fromFeatures(f))
+    }
+
+    private fun drawReports() {
+        val src = style?.getSourceAs<GeoJsonSource>("reports-src") ?: return
+        src.setGeoJson(FeatureCollection.fromFeatures(reports.map { r ->
+            Feature.fromGeometry(Point.fromLngLat(r.lon, r.lat)).also { it.addStringProperty("icon", "rep-${r.type}") }
+        }))
     }
 
     private fun fitRoute(r: Route) {
@@ -346,7 +503,7 @@ class MainActivity : AppCompatActivity() {
         if (r.points.size < 2) return
         val b = LatLngBounds.Builder()
         r.points.forEach { b.include(LatLng(it.lat, it.lon)) }
-        m.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 80, 260, 80, 320), 800)
+        m.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 80, 260, 80, 420), 800)
     }
 
     // ---------- Lokalizacja ----------
@@ -389,27 +546,234 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onLocation(loc: Location) {
+        val first = lastLocation == null
         lastLocation = loc
+        val pos = LatLon(loc.latitude, loc.longitude)
         if (SystemClock.elapsedRealtime() - lastThemeCheck > 60_000) {
             lastThemeCheck = SystemClock.elapsedRealtime()
             reloadStyleIfNeeded() // automatyczne przełączenie dzień/noc
         }
         map?.locationComponent?.takeIf { it.isLocationComponentActivated }?.forceLocationUpdate(loc)
-        val e = engine ?: return
-        if (!navigating) return
-        val st = e.update(LatLon(loc.latitude, loc.longitude), loc.speed.toDouble(), loc.accuracy.toDouble())
-        lastNavState = st
-        renderNavState(st)
-        if (st.arrived) {
-            stopNavigation(arrived = true)
-            return
-        }
-        if (st.offRoute && !rerouting && SystemClock.elapsedRealtime() - lastRerouteAt > REROUTE_MIN_INTERVAL_MS) {
-            reroute(silent = false)
+        if (first) pendingPlace?.let { pendingPlace = null; pickPlace(it) }
+        collectSpeedSample(loc)
+        recentPts.addLast(pos)
+        while (recentPts.size > 8) recentPts.removeFirst()
+
+        val e = engine
+        if (navigating && e != null) {
+            val st = e.update(pos, loc.speed.toDouble(), loc.accuracy.toDouble())
+            lastNavState = st
+            renderNavState(st)
+            checkReportsOnRoute(e, st)
+            updateSpeed(loc, st.speedLimit)
+            if (st.arrived) {
+                stopNavigation(arrived = true)
+                return
+            }
+            if (st.offRoute && !rerouting && SystemClock.elapsedRealtime() - lastRerouteAt > REROUTE_MIN_INTERVAL_MS) {
+                reroute(silent = false)
+            }
+        } else {
+            pollFreeLimit(loc)
+            checkReportsAhead(loc)
+            updateSpeed(loc, freeLimit)
         }
     }
 
-    // ---------- Wyszukiwanie i trasy ----------
+    // ---------- Prędkość i ograniczenia ----------
+
+    private fun updateSpeed(loc: Location, limit: Int?) {
+        val kmh = if (loc.hasSpeed()) (loc.speed * 3.6).toInt() else -1
+        currentSpeedView.visibility = if (kmh >= 0) View.VISIBLE else View.GONE
+        currentSpeedView.text = "$kmh km/h"
+        if (limit == null) {
+            speedLimitView.visibility = View.GONE
+            speedLimitView.isActivated = false
+            return
+        }
+        speedLimitView.visibility = View.VISIBLE
+        speedLimitView.text = "$limit"
+        val now = SystemClock.elapsedRealtime()
+        if (kmh > limit + 5) {
+            if (overSince == 0L) overSince = now
+            if (now - overSince > 3000) {
+                speedLimitView.isActivated = true
+                if (now - lastOverWarn > 60_000) {
+                    lastOverWarn = now
+                    tone?.startTone(ToneGenerator.TONE_PROP_BEEP2, 300)
+                    voice.say("Ograniczenie do $limit.")
+                }
+            }
+        } else {
+            overSince = 0L
+            speedLimitView.isActivated = false
+        }
+    }
+
+    /** Bez trasy: co 15 s pytamy serwer o limit na ulicy, którą jedziemy. */
+    private fun pollFreeLimit(loc: Location) {
+        val now = SystemClock.elapsedRealtime()
+        if (loc.speed < 3f || recentPts.size < 3 || now - lastLimitPoll < 15_000 || Prefs.server(this).isBlank()) return
+        lastLimitPoll = now
+        val pts = recentPts.toList()
+        lifecycleScope.launch {
+            freeLimit = runCatching { Api.from(this@MainActivity).limitAt(pts) }.getOrNull()
+        }
+    }
+
+    private fun reportLimitDialog() {
+        if (!requireAccount()) return
+        val loc = lastLocation ?: run { toast("Czekam na GPS…"); return }
+        val labels = LIMIT_VALUES.map { "$it km/h" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Jakie jest tu ograniczenie?")
+            .setItems(labels) { _, i ->
+                val v = LIMIT_VALUES[i]
+                lifecycleScope.launch {
+                    try {
+                        val status = Api.from(this@MainActivity).reportLimit(LatLon(loc.latitude, loc.longitude), loc.bearingOrNull(), v, "")
+                        toast(if (status == "approved") "Zapisano: $v km/h" else "Wysłano do zatwierdzenia przez admina: $v km/h")
+                    } catch (e: ApiException) { toast(e.message ?: "Błąd") }
+                }
+            }
+            .setNegativeButton("Anuluj", null)
+            .show()
+    }
+
+    // ---------- Zgłoszenia (jak Yanosik) ----------
+
+    private fun requireAccount(): Boolean {
+        if (Prefs.userToken(this).isNotEmpty()) return true
+        AlertDialog.Builder(this)
+            .setTitle("Potrzebne konto")
+            .setMessage("Żeby zgłaszać zdarzenia i ograniczenia, załóż konto w Ustawieniach (wystarczy imię lub kod).")
+            .setPositiveButton("Ustawienia") { _, _ -> startActivity(Intent(this, SettingsActivity::class.java)) }
+            .setNegativeButton("Anuluj", null)
+            .show()
+        return false
+    }
+
+    private fun reportDialog() {
+        if (!requireAccount()) return
+        val loc = lastLocation ?: run { toast("Czekam na GPS…"); return }
+        AlertDialog.Builder(this)
+            .setTitle("Zgłoś na mapie")
+            .setItems(REPORT_LABELS.map { it.second }.toTypedArray()) { _, i ->
+                val type = REPORT_LABELS[i].first
+                lifecycleScope.launch {
+                    try {
+                        Api.from(this@MainActivity).addReport(type, LatLon(loc.latitude, loc.longitude), loc.bearingOrNull())
+                        toast("Dzięki! Zgłoszenie widzą inni kierowcy")
+                        refreshReports()
+                    } catch (e: ApiException) { toast(e.message ?: "Błąd") }
+                }
+            }
+            .setNegativeButton("Anuluj", null)
+            .show()
+    }
+
+    private fun startReportsLoop() {
+        lifecycleScope.launch {
+            while (isActive) {
+                refreshReports()
+                delay(60_000)
+            }
+        }
+    }
+
+    private suspend fun refreshReports() {
+        if (Prefs.server(this).isBlank()) return
+        val near = lastLocation?.let { LatLon(it.latitude, it.longitude) }
+        runCatching { Api.from(this).reports(near) }.getOrNull()?.let {
+            reports = it
+            drawReports()
+        }
+    }
+
+    /** Na trasie: ostrzeż przed zgłoszeniem leżącym na trasie przed nami; przy mijaniu zapytaj „nadal jest?”. */
+    private fun checkReportsOnRoute(e: NavigationEngine, st: NavState) {
+        for (r in reports) {
+            val (along, dist) = e.project(LatLon(r.lat, r.lon))
+            if (dist > 40) continue
+            val ahead = along - st.alongM
+            if (ahead in 0.0..700.0 && r.id !in alertedReports) {
+                alertedReports += r.id
+                voice.say("Uwaga, ${r.label.lowercase()}, ${Speech.inDistance(ahead).replaceFirstChar { it.lowercase() }}.")
+            }
+            if (ahead in -40.0..25.0) askVote(r)
+        }
+    }
+
+    /** Bez trasy: zgłoszenie w promieniu 400 m mniej więcej na wprost. */
+    private fun checkReportsAhead(loc: Location) {
+        if (!loc.hasBearing() || loc.speed < 4f) return
+        val me = LatLon(loc.latitude, loc.longitude)
+        for (r in reports) {
+            val p = LatLon(r.lat, r.lon)
+            val d = Geo.distance(me, p)
+            val brg = bearingTo(me, p)
+            val diff = abs(((brg - loc.bearing + 540) % 360) - 180)
+            if (d < 400 && diff < 30 && r.id !in alertedReports) {
+                alertedReports += r.id
+                voice.say("Uwaga, ${r.label.lowercase()}, ${Speech.inDistance(d).replaceFirstChar { it.lowercase() }}.")
+            }
+            if (d < 30) askVote(r)
+        }
+    }
+
+    private fun bearingTo(a: LatLon, b: LatLon): Double {
+        val la1 = Math.toRadians(a.lat); val la2 = Math.toRadians(b.lat); val dl = Math.toRadians(b.lon - a.lon)
+        val y = Math.sin(dl) * Math.cos(la2)
+        val x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dl)
+        return (Math.toDegrees(Math.atan2(y, x)) + 360) % 360
+    }
+
+    private fun askVote(r: Report) {
+        if (r.id in votedReports || voteFor != null || Prefs.userToken(this).isEmpty()) return
+        voteFor = r
+        votedReports += r.id
+        voteText.text = "${r.label} — nadal jest?"
+        voteBar.visibility = View.VISIBLE
+        lifecycleScope.launch {
+            delay(15_000)
+            if (voteFor?.id == r.id) { voteFor = null; voteBar.visibility = View.GONE }
+        }
+    }
+
+    private fun vote(stillThere: Boolean) {
+        val r = voteFor ?: return
+        voteFor = null
+        voteBar.visibility = View.GONE
+        lifecycleScope.launch {
+            runCatching { Api.from(this@MainActivity).voteReport(r.id, stillThere) }
+            refreshReports()
+        }
+    }
+
+    // ---------- Próbki prędkości (anonimowe korki od kierowców) ----------
+
+    private fun collectSpeedSample(loc: Location) {
+        val now = System.currentTimeMillis()
+        if (loc.hasSpeed() && loc.hasBearing() && loc.accuracy < 30 && now - lastSampleAt >= 5000) {
+            lastSampleAt = now
+            samples.put(JSONObject().put("lat", loc.latitude).put("lon", loc.longitude)
+                .put("speed", loc.speed.toDouble()).put("heading", loc.bearing.toDouble()).put("t", now))
+        }
+        if (samples.length() > 0 && now - lastFlushAt > 60_000 && Prefs.server(this).isNotBlank()) {
+            lastFlushAt = now
+            val batch = samples
+            samples = JSONArray()
+            lifecycleScope.launch { runCatching { Api.from(this@MainActivity).sendSpeed(Prefs.deviceId(this@MainActivity), batch) } }
+        }
+    }
+
+    // ---------- Wyszukiwanie, cele, przystanki ----------
+
+    private fun setSearchText(t: String) {
+        suppressWatcher = true
+        searchInput.setText(t)
+        suppressWatcher = false
+    }
 
     private fun search(q: String) {
         if (q.isBlank()) return
@@ -434,7 +798,6 @@ class MainActivity : AppCompatActivity() {
             try {
                 val near = lastLocation?.let { LatLon(it.latitude, it.longitude) }
                 val found = Api.from(this@MainActivity).geocode(q, near, fast = true)
-                // Pole mogło się zmienić w trakcie zapytania.
                 if (searchInput.text.toString().trim() == q && searchInput.hasFocus()) showResults(found, recent = false)
             } catch (_: ApiException) { /* podpowiedzi są opcjonalne */ }
         }
@@ -457,13 +820,93 @@ class MainActivity : AppCompatActivity() {
         results.visibility = if (list.isEmpty()) View.GONE else View.VISIBLE
     }
 
+    /** Wybrane miejsce: cel albo (w trybie „+ Przystanek”) przystanek przed celem. */
+    private fun pickPlace(p: Place) {
+        if (lastLocation == null) {
+            pendingPlace = p
+            toast("Czekam na GPS…")
+            return
+        }
+        if (addingStop && destination != null) {
+            addingStop = false
+            if (stops.size >= 8) { toast("Maksymalnie 8 przystanków"); return }
+            stops += p
+        } else {
+            addingStop = false
+            if (routeResp == null) stops.clear()
+            destPlace = p
+            destination = LatLon(p.lat, p.lon)
+        }
+        requestRoute(fit = true)
+    }
+
+    private fun requestRoute(fit: Boolean) {
+        val loc = lastLocation ?: return
+        val dest = destination ?: return
+        lifecycleScope.launch {
+            progress.visibility = View.VISIBLE
+            try {
+                val resp = Api.from(this@MainActivity)
+                    .route(LatLon(loc.latitude, loc.longitude), dest, loc.bearingOrNull(), stops.map { LatLon(it.lat, it.lon) })
+                    .withMode(routeMode)
+                routeResp = resp
+                drawRoute(resp)
+                if (fit) fitRoute(resp.chosen)
+                showPreview(resp)
+            } catch (e: ApiException) {
+                toast(e.message ?: "Błąd")
+            } finally {
+                progress.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun editStops() {
+        val all = ArrayList(stops + listOfNotNull(destPlace))
+        if (all.size < 2) return
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 16, 24, 0) }
+        lateinit var dialog: AlertDialog
+        fun render() {
+            box.removeAllViews()
+            all.forEachIndexed { i, p ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                row.addView(TextView(this).apply {
+                    text = (if (i == all.size - 1) "🏁 " else "${i + 1}. ") + p.label
+                    textSize = 16f
+                    setTextColor(color(R.color.text))
+                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                fun btn(t: String, enabled: Boolean, f: () -> Unit) = row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                    text = t; isEnabled = enabled; minWidth = 0; setOnClickListener { f(); render() }
+                })
+                btn("↑", i > 0) { java.util.Collections.swap(all, i, i - 1) }
+                btn("↓", i < all.size - 1) { java.util.Collections.swap(all, i, i + 1) }
+                btn("✕", all.size > 1) { all.removeAt(i) }
+                box.addView(row)
+            }
+        }
+        render()
+        dialog = AlertDialog.Builder(this)
+            .setTitle("Kolejność przystanków")
+            .setView(box)
+            .setPositiveButton("Zapisz") { _, _ ->
+                stops.clear()
+                stops.addAll(all.dropLast(1))
+                destPlace = all.last()
+                destination = LatLon(destPlace!!.lat, destPlace!!.lon)
+                requestRoute(fit = true)
+            }
+            .setNegativeButton("Anuluj", null)
+            .show()
+    }
+
     private fun openInGoogleMaps() {
         val d = destination ?: return
-        val uri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lon}&travelmode=driving")
+        var url = "https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lon}&travelmode=driving"
+        if (stops.isNotEmpty()) url += "&waypoints=" + Uri.encode(stops.joinToString("|") { "${it.lat},${it.lon}" })
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, uri))
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage("com.google.android.apps.maps"))
         } catch (_: Exception) {
-            toast("Nie można otworzyć Google Maps")
+            runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.onFailure { toast("Nie można otworzyć Google Maps") }
         }
     }
 
@@ -476,32 +919,13 @@ class MainActivity : AppCompatActivity() {
         showPreview(resp)
     }
 
-    private fun previewTo(dest: LatLon) {
-        val loc = lastLocation ?: run { toast("Czekam na GPS…"); return }
-        destination = dest
-        lifecycleScope.launch {
-            progress.visibility = View.VISIBLE
-            try {
-                val resp = Api.from(this@MainActivity).route(LatLon(loc.latitude, loc.longitude), dest, loc.bearingOrNull())
-                    .withMode(routeMode)
-                routeResp = resp
-                drawRoute(resp)
-                fitRoute(resp.chosen)
-                showPreview(resp)
-            } catch (e: ApiException) {
-                toast(e.message ?: "Błąd")
-            } finally {
-                progress.visibility = View.GONE
-            }
-        }
-    }
-
     private fun showPreview(resp: RouteResponse) {
         val r = resp.chosen
         bottomPanel.visibility = View.VISIBLE
         cancelButton.visibility = View.VISIBLE
         gmapsButton.visibility = View.VISIBLE
         routeOptions.visibility = View.VISIBLE
+        stopsRow.visibility = View.VISIBLE
         startButton.text = getString(R.string.start)
         for (mode in RouteModes.ALL) {
             val v = optViews[mode] ?: continue
@@ -509,32 +933,136 @@ class MainActivity : AppCompatActivity() {
             v.text = "${RouteModes.label(mode)}\n${minutes(m.trafficTimeS)} · ${Speech.short(m.distanceM.toDouble())}"
             v.isSelected = mode == routeMode
         }
+        stopsInfo.text = if (stops.isEmpty()) "Cel: ${destPlace?.label ?: ""}"
+        else stops.mapIndexed { i, p -> "${i + 1}. ${p.label}" }.joinToString(" → ") + " → 🏁 ${destPlace?.label ?: ""}"
+        editStopsButton.visibility = if (stops.isNotEmpty()) View.VISIBLE else View.GONE
         summary.text = "${minutes(r.trafficTimeS)} · ${Speech.short(r.distanceM.toDouble())}"
-        val delay = r.trafficTimeS - r.baseTimeS
+        val delayS = r.trafficTimeS - r.baseTimeS
         summaryDetail.text = buildString {
             append(when (routeMode) {
                 "fastest" -> "Najszybsza (z korkami)"
                 "shortest" -> "Najkrótsza (najmniej km)"
                 else -> "Optymalna: krótka, bez straty czasu"
             })
-            if (r.hasTraffic) append(if (delay >= 60) " · korki +${delay / 60} min" else " · bez korków")
+            if (r.hasTraffic) append(if (delayS >= 60) " · korki +${delayS / 60} min" else " · bez korków")
             else append(" · brak danych o korkach")
         }
     }
 
     private fun clearRoute() {
-        routeResp = null; destination = null; engine = null
+        routeResp = null; destination = null; destPlace = null; engine = null
+        stops.clear(); addingStop = false
         drawRoute(null)
         bottomPanel.visibility = View.GONE
-        suppressWatcher = true
-        searchInput.setText("")
-        suppressWatcher = false
+        setSearchText("")
+        renderFavorites()
     }
+
+    // ---------- Szybkie cele (ulubione) ----------
+
+    private fun renderFavorites() {
+        favRow.removeAllViews()
+        val d = resources.displayMetrics.density
+        fun chip(text: String, onClick: () -> Unit, onLong: (() -> Unit)? = null) {
+            val tv = TextView(this).apply {
+                this.text = text
+                textSize = 15f
+                setTextColor(color(R.color.text))
+                setBackgroundResource(R.drawable.chip)
+                setPadding((14 * d).toInt(), (9 * d).toInt(), (14 * d).toInt(), (9 * d).toInt())
+                setOnClickListener { onClick() }
+                if (onLong != null) setOnLongClickListener { onLong(); true }
+            }
+            favRow.addView(tv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginEnd = (8 * d).toInt() })
+        }
+        for (f in Prefs.favorites(this)) {
+            chip("⭐ ${f.name}", { pickPlace(Place(f.name, f.label, f.lat, f.lon)) }) {
+                AlertDialog.Builder(this).setTitle("Usunąć „${f.name}”?")
+                    .setPositiveButton("Usuń") { _, _ -> Prefs.saveFavorites(this, Prefs.favorites(this).filter { it != f }); renderFavorites() }
+                    .setNegativeButton("Anuluj", null).show()
+            }
+        }
+        chip("+ Dodaj ulubione", { addFavorite() })
+    }
+
+    private fun addFavorite() {
+        val p = destPlace
+        if (p == null) {
+            toast("Najpierw wybierz cel (wyszukaj albo przytrzymaj palec na mapie), potem dodaj go do ulubionych")
+            return
+        }
+        val d = resources.displayMetrics.density
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding((20 * d).toInt(), (8 * d).toInt(), (20 * d).toInt(), 0) }
+        val input = EditText(this).apply { setText(if (p.label == "Punkt na mapie") "" else p.label); hint = "Nazwa, np. Baza" }
+        box.addView(input)
+        val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (name in listOf("Baza", "Dworzec", "Lotnisko", "Szpital", "Dom")) {
+            presets.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                text = name; minWidth = 0; setPadding(8, 0, 8, 0); setOnClickListener { input.setText(name) }
+            })
+        }
+        box.addView(android.widget.HorizontalScrollView(this).apply { addView(presets) })
+        AlertDialog.Builder(this)
+            .setTitle("Dodaj do szybkich celów")
+            .setMessage(p.toString())
+            .setView(box)
+            .setPositiveButton("Zapisz") { _, _ ->
+                val name = input.text.toString().trim().ifEmpty { p.label }
+                Prefs.saveFavorites(this, Prefs.favorites(this).filter { it.name != name } + Favorite(name, p.toString(), p.lat, p.lon))
+                renderFavorites()
+                toast("Dodano „$name”")
+            }
+            .setNegativeButton("Anuluj", null)
+            .show()
+    }
+
+    // ---------- Linki z innych aplikacji ----------
+
+    private fun handleExternalIntent(intent: Intent?) {
+        if (intent == null) return
+        val raw = when (intent.action) {
+            Intent.ACTION_VIEW -> intent.dataString
+            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)?.let { t ->
+                Regex("""https?://\S+""").find(t)?.value ?: t
+            }
+            else -> null
+        } ?: return
+        intent.action = null // nie obsługuj drugi raz po obrocie ekranu
+        lifecycleScope.launch {
+            val url = if (raw.contains("goo.gl/")) resolveShortLink(raw) else raw
+            when (val t = ExternalLinks.parse(url)) {
+                is ExternalTarget.Point -> pickPlace(Place(t.label ?: "Cel z innej aplikacji", "", t.pos.lat, t.pos.lon))
+                is ExternalTarget.Query -> { setSearchText(t.text); search(t.text) }
+                null -> toast("Nie rozpoznano adresu z linku")
+            }
+        }
+    }
+
+    /** Krótkie linki maps.app.goo.gl — śledzimy przekierowania do pełnego adresu Google Maps. */
+    private suspend fun resolveShortLink(url: String): String = withContext(Dispatchers.IO) {
+        var cur = url
+        repeat(5) {
+            val c = runCatching { URL(cur).openConnection() as HttpURLConnection }.getOrNull() ?: return@withContext cur
+            try {
+                c.instanceFollowRedirects = false
+                c.connectTimeout = 5000; c.readTimeout = 5000
+                c.requestMethod = "GET"
+                val loc = c.getHeaderField("Location")
+                if (c.responseCode in 300..399 && loc != null) cur = URL(URL(cur), loc).toString() else return@withContext cur
+            } catch (_: Exception) {
+                return@withContext cur
+            } finally { c.disconnect() }
+        }
+        cur
+    }
+
+    // ---------- Nawigacja ----------
 
     @SuppressLint("MissingPermission")
     private fun startNavigation() {
         val resp = routeResp ?: return
         navigating = true
+        alertedReports.clear()
         engine = NavigationEngine(resp.chosen, voice::say)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         searchPanel.visibility = View.GONE
@@ -543,9 +1071,17 @@ class MainActivity : AppCompatActivity() {
         cancelButton.visibility = View.GONE
         gmapsButton.visibility = View.GONE
         routeOptions.visibility = View.GONE
+        stopsRow.visibility = View.GONE
         startButton.text = getString(R.string.stop)
         drawRoute(resp)
         followCamera()
+        // Nawigacja w tle (wygaszony ekran, rozmowa) + powiadomienie z manewrem.
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        runCatching { NavService.start(this) }
+        updatePipParams()
         lastLocation?.let { onLocation(it) }
         refreshJob?.cancel()
         refreshJob = lifecycleScope.launch {
@@ -559,8 +1095,11 @@ class MainActivity : AppCompatActivity() {
     private fun stopNavigation(arrived: Boolean = false) {
         navigating = false
         refreshJob?.cancel()
+        runCatching { NavService.stop(this) }
+        updatePipParams()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         navBanner.visibility = View.GONE
+        lanesRow.visibility = View.GONE
         searchPanel.visibility = View.VISIBLE
         map?.locationComponent?.takeIf { it.isLocationComponentActivated }?.apply {
             cameraMode = CameraMode.NONE
@@ -586,9 +1125,13 @@ class MainActivity : AppCompatActivity() {
         rerouting = true
         lastRerouteAt = SystemClock.elapsedRealtime()
         if (!silent) voice.say("Przeliczam trasę.")
+        // Przystanki, które już minęliśmy, wypadają z trasy.
+        val passed = lastNavState?.let { st -> engine?.route?.maneuvers?.count { it.stop != null && it.begin <= st.traveledIndex } } ?: 0
+        repeat(minOf(passed, stops.size)) { stops.removeAt(0) }
         lifecycleScope.launch {
             try {
-                val resp = Api.from(this@MainActivity).route(LatLon(loc.latitude, loc.longitude), dest, loc.bearingOrNull())
+                val resp = Api.from(this@MainActivity)
+                    .route(LatLon(loc.latitude, loc.longitude), dest, loc.bearingOrNull(), stops.map { LatLon(it.lat, it.lon) })
                     .withMode(routeMode)
                 if (!navigating) return@launch
                 val currentRemainingS = lastNavState?.remainingS ?: Double.MAX_VALUE
@@ -614,6 +1157,29 @@ class MainActivity : AppCompatActivity() {
         val eta = SimpleDateFormat("HH:mm", Locale.forLanguageTag("pl-PL")).format(Date(System.currentTimeMillis() + (st.remainingS * 1000).toLong()))
         summary.text = "${minutes(st.remainingS.toInt())} · ${Speech.short(st.remainingM)}"
         summaryDetail.text = "Przyjazd $eta" + if (st.offRoute) " · poza trasą" else ""
+        renderLanes(st.lanes)
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastNotifAt > 2000) {
+            lastNotifAt = now
+            NavService.update(this, "${arrow.text} ${distToNext.text} · ${next?.instruction ?: ""}",
+                "Przyjazd $eta · zostało ${Speech.short(st.remainingM)}")
+        }
+    }
+
+    private fun renderLanes(info: LaneInfo?) {
+        if (info == null || isInPip()) { lanesRow.visibility = View.GONE; return }
+        lanesRow.removeAllViews()
+        val d = resources.displayMetrics.density
+        for (l in info.lanes) {
+            lanesRow.addView(TextView(this).apply {
+                text = Lanes.label(l)
+                textSize = 26f
+                setTextColor(if (l.ok) 0xFFFFFFFF.toInt() else 0x66FFFFFF)
+                setTypeface(typeface, if (l.ok) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+                setPadding((8 * d).toInt(), (2 * d).toInt(), (8 * d).toInt(), (2 * d).toInt())
+            })
+        }
+        lanesRow.visibility = View.VISIBLE
     }
 
     @SuppressLint("MissingPermission")
@@ -632,6 +1198,38 @@ class MainActivity : AppCompatActivity() {
         map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(loc.latitude, loc.longitude), 15.0), 500)
     }
 
+    // ---------- Małe okienko (obraz w obrazie) jak w Google Maps ----------
+
+    private fun isInPip() = Build.VERSION.SDK_INT >= 24 && isInPictureInPictureMode
+
+    private fun pipParams(): PictureInPictureParams? {
+        if (Build.VERSION.SDK_INT < 26) return null
+        val b = PictureInPictureParams.Builder().setAspectRatio(Rational(3, 4))
+        if (Build.VERSION.SDK_INT >= 31) b.setAutoEnterEnabled(navigating).setSeamlessResizeEnabled(true)
+        return b.build()
+    }
+
+    private fun updatePipParams() {
+        if (Build.VERSION.SDK_INT >= 26) runCatching { pipParams()?.let { setPictureInPictureParams(it) } }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (navigating && Build.VERSION.SDK_INT in 26..30) runCatching { pipParams()?.let { enterPictureInPictureMode(it) } }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        val vis = if (isInPictureInPictureMode) View.GONE else View.VISIBLE
+        sideButtons.visibility = vis
+        bottomPanel.visibility = if (isInPictureInPictureMode || routeResp == null) View.GONE else View.VISIBLE
+        instruction.visibility = vis
+        speedBox.visibility = vis
+        voteBar.visibility = View.GONE
+        if (isInPictureInPictureMode) lanesRow.visibility = View.GONE
+        if (!navigating) searchPanel.visibility = vis
+    }
+
     // ---------- Pomocnicze ----------
 
     private fun Location.bearingOrNull(): Float? = if (hasBearing() && speed > 2f) bearing else null
@@ -647,15 +1245,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-
-    // ---------- Cykl życia MapView ----------
-
-    override fun onStart() { super.onStart(); mapView.onStart() }
-    override fun onResume() {
-        super.onResume(); mapView.onResume()
-        style?.let { updateTrafficLayer(it) } // po zmianie ustawień
-        reloadStyleIfNeeded()
-    }
 
     // ---------- Styl mapy (dzień / noc) ----------
 
@@ -692,13 +1281,25 @@ class MainActivity : AppCompatActivity() {
             routeResp?.let { drawRoute(it) }
         }
     }
+
+    // ---------- Cykl życia ----------
+
+    override fun onStart() { super.onStart(); mapView.onStart() }
+    override fun onResume() {
+        super.onResume(); mapView.onResume()
+        style?.let { updateTrafficLayer(it) } // po zmianie ustawień
+        reloadStyleIfNeeded()
+        renderFavorites()
+    }
     override fun onPause() { super.onPause(); mapView.onPause() }
     override fun onStop() { super.onStop(); mapView.onStop() }
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView.onSaveInstanceState(outState) }
     override fun onDestroy() {
         fused.removeLocationUpdates(locationCallback)
+        if (navigating) runCatching { NavService.stop(this) }
         voice.shutdown()
+        tone?.release()
         mapView.onDestroy()
         super.onDestroy()
     }

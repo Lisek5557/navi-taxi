@@ -32,7 +32,75 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.testButton).setOnClickListener { runTest() }
         findViewById<MaterialButton>(R.id.saveButton).setOnClickListener { saveAndClose() }
 
+        setupAccount()
+        setupOffline()
         handleIntent(intent)
+    }
+
+    // ---------- Konto kierowcy ----------
+    private fun setupAccount() {
+        val info = findViewById<TextView>(R.id.accountInfo)
+        val row = findViewById<android.view.View>(R.id.registerRow)
+        val admin = findViewById<MaterialButton>(R.id.adminButton)
+        fun refresh() {
+            val name = Prefs.userName(this)
+            if (name.isEmpty()) {
+                info.text = "Nie masz jeszcze konta — wpisz imię lub kod i załóż je (bez akceptacji)."
+                row.visibility = android.view.View.VISIBLE
+                admin.visibility = android.view.View.GONE
+            } else {
+                info.text = "Zalogowany jako: $name" + if (Prefs.isAdmin(this)) " (admin)" else ""
+                row.visibility = android.view.View.GONE
+                admin.visibility = if (Prefs.isAdmin(this)) android.view.View.VISIBLE else android.view.View.GONE
+            }
+        }
+        refresh()
+        // Odśwież rolę z serwera (admin mógł ją zmienić w panelu).
+        if (Prefs.userToken(this).isNotEmpty()) lifecycleScope.launch {
+            runCatching { Api.from(this@SettingsActivity).me() }.getOrNull()?.let {
+                Prefs.setUser(this@SettingsActivity, Prefs.userToken(this@SettingsActivity), it.getString("name"), it.getString("role"))
+                refresh()
+            }
+        }
+        findViewById<MaterialButton>(R.id.registerButton).setOnClickListener {
+            val name = findViewById<EditText>(R.id.nameInput).text.toString().trim()
+            Prefs.save(this, normalizedServer(), key.text.toString())
+            lifecycleScope.launch {
+                try {
+                    val j = Api.from(this@SettingsActivity).register(name)
+                    val u = j.getJSONObject("user")
+                    Prefs.setUser(this@SettingsActivity, j.getString("token"), u.getString("name"), u.getString("role"))
+                    toast(if (u.getString("role") == "admin") "Konto założone — jesteś adminem" else "Konto założone")
+                    refresh()
+                } catch (e: ApiException) {
+                    toast(e.message ?: "Błąd")
+                }
+            }
+        }
+        admin.setOnClickListener { startActivity(Intent(this, AdminActivity::class.java)) }
+    }
+
+    // ---------- Mapa offline ----------
+    private fun setupOffline() {
+        val info = findViewById<TextView>(R.id.offlineInfo)
+        val btn = findViewById<MaterialButton>(R.id.offlineButton)
+        OfflineMaps.status(this) { mb, complete ->
+            runOnUiThread {
+                if (mb > 0) info.text = if (complete) "✅ Pobrana mapa kujawsko-pomorskiego ($mb MB)" else "Pobrano częściowo ($mb MB) — wznów pobieranie"
+            }
+        }
+        btn.setOnClickListener {
+            btn.isEnabled = false
+            info.text = "Rozpoczynam pobieranie…"
+            OfflineMaps.download(this, Prefs.server(this), object : OfflineMaps.Listener {
+                override fun onProgress(percent: Int, mb: Long) = runOnUiThread { info.text = "Pobieranie: $percent% ($mb MB)" }
+                override fun onDone(mb: Long) = runOnUiThread { info.text = "✅ Mapa offline gotowa ($mb MB)"; btn.isEnabled = true }
+                override fun onError(msg: String) = runOnUiThread { info.text = "❌ $msg"; btn.isEnabled = true }
+            })
+        }
+        findViewById<MaterialButton>(R.id.offlineDelete).setOnClickListener {
+            OfflineMaps.delete(this) { runOnUiThread { info.text = "Usunięto mapę offline"; btn.isEnabled = true } }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

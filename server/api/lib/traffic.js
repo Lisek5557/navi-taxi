@@ -2,6 +2,7 @@
 // Trasa jest próbkowana co SAMPLE_EVERY_M metrów, wyniki są cache'owane per ~100 m.
 
 import { cumulative } from './polyline.js';
+import { bearing } from './db.js';
 
 const cache = new Map(); // key -> {t, value}
 
@@ -40,8 +41,15 @@ export function makeTraffic({ apiKey, fetchImpl = fetch, ttlMs = 120_000, sample
    * Zwraca { ranges: [{from,to,level}], trafficTime } dla kształtu trasy.
    * baseTime: czas wg Valhalli (s). Bez klucza API zwraca baseTime i brak zakresów.
    */
-  async function analyze(points, baseTime) {
-    if (!apiKey || points.length < 2) return { ranges: [], trafficTime: baseTime, hasData: false };
+  async function analyze(points, baseTime, { limits = [], crowd = null } = {}) {
+    if ((!apiKey && !crowd) || points.length < 2) return { ranges: [], trafficTime: baseTime, hasData: false };
+    const limitAt = (i) => (limits.find((l) => i >= l.from && i <= l.to) || {}).limit || 50;
+    const crowdAt = (i) => {
+      if (!crowd) return null;
+      const j = Math.min(i + 1, points.length - 1), h = bearing(points[Math.max(0, j - 1)], points[j]);
+      const v = crowd(points[i][0], points[i][1], h);
+      return v == null ? null : { ratio: v / (limitAt(i) * 0.9), closed: false, crowd: true };
+    };
     const cum = cumulative(points);
     const total = cum[cum.length - 1] || 1;
     const step = Math.max(sampleEveryM, total / maxSamples);
@@ -55,7 +63,8 @@ export function makeTraffic({ apiKey, fetchImpl = fetch, ttlMs = 120_000, sample
     }
     if (samples.length === 0) samples.push(Math.floor(points.length / 2));
 
-    const flows = await Promise.all(samples.map((idx) => flowAt(points[idx][0], points[idx][1])));
+    // Najpierw prędkości kierowców TaxiNav (dokładne lokalnie, bez limitu), potem TomTom.
+    const flows = await Promise.all(samples.map((idx) => crowdAt(idx) || (apiKey ? flowAt(points[idx][0], points[idx][1]) : null)));
 
     // Każda próbka obejmuje zakres kształtu między połowami odległości do sąsiadów.
     const ranges = [];
@@ -70,6 +79,7 @@ export function makeTraffic({ apiKey, fetchImpl = fetch, ttlMs = 120_000, sample
       trafficTime += segBase / ratio;
       ranges.push({ from, to, level: congestionLevel(f?.ratio ?? null, f?.closed) });
     }
+    if (!any) return { ranges: [], trafficTime: baseTime, hasData: false };
     return { ranges, trafficTime: Math.round(trafficTime), hasData: any };
   }
 

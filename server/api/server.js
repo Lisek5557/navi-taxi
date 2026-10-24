@@ -5,12 +5,16 @@ import { makeTraffic } from './lib/traffic.js';
 import { loadGeocoder } from './lib/geocoder.js';
 import { qrSvg } from './lib/qr.js';
 import { buildStyle } from './lib/style.js';
+import { openDb } from './lib/db.js';
+import { makeCommunity, REPORT_TYPES } from './lib/community.js';
 
 export function createServer(cfg, deps = {}) {
   const fetchImpl = deps.fetchImpl || fetch;
   const traffic = makeTraffic({ apiKey: cfg.tomtomKey, fetchImpl, baseUrl: cfg.tomtomBase });
+  const db = deps.db || openDb(cfg.dbFile);
+  const community = makeCommunity(db, deps.now ? { now: deps.now } : {});
   const router = makeRouter({
-    valhallaUrl: cfg.valhallaUrl, fetchImpl, traffic,
+    valhallaUrl: cfg.valhallaUrl, fetchImpl, traffic, community,
     tolerancePct: cfg.tolerancePct, maxExtraSec: cfg.maxExtraSec,
   });
   const tileCache = new Map(); // "z/x/y" -> {t, buf}
@@ -78,8 +82,82 @@ export function createServer(cfg, deps = {}) {
       }
 
       // Autoryzacja: serwer jest wystawiony do internetu przez tunel.
+      // Autoryzacja: klucz serwera (z kodu QR) albo osobisty token kierowcy.
       const token = req.headers['x-api-key'] || url.searchParams.get('k');
-      if (cfg.apiToken && token !== cfg.apiToken) return send(res, 401, { error: 'Zły klucz API' });
+      const user = community.userByToken(req.headers['x-user-token']);
+      const serverKeyOk = !cfg.apiToken || token === cfg.apiToken;
+      if (!serverKeyOk && !user) return send(res, 401, { error: 'Zły klucz API' });
+      const needUser = () => {
+        if (!user) throw Object.assign(new Error('Zarejestruj się w Ustawieniach'), { status: 401 });
+        return user;
+      };
+      const needAdmin = () => {
+        const u = needUser();
+        if (u.role !== 'admin') throw Object.assign(new Error('Tylko dla admina'), { status: 403 });
+        return u;
+      };
+
+      // ----- Konta -----
+      if (req.method === 'POST' && url.pathname === '/register') {
+        if (!serverKeyOk) return send(res, 401, { error: 'Zły klucz API' });
+        const u = community.register((await readJson(req)).name);
+        return send(res, 200, { token: u.token, user: community.publicUser(u) });
+      }
+      if (req.method === 'GET' && url.pathname === '/me') return send(res, 200, { user: community.publicUser(needUser()) });
+
+      // ----- Zgłoszenia (kontrola, wypadek, utrudnienie, zamknięta ulica) -----
+      if (req.method === 'GET' && url.pathname === '/reports') {
+        const lat = parseFloat(url.searchParams.get('lat')), lon = parseFloat(url.searchParams.get('lon'));
+        return send(res, 200, { reports: community.listReports({ lat, lon }), types: REPORT_TYPES });
+      }
+      if (req.method === 'POST' && url.pathname === '/reports') {
+        const r = community.addReport(needUser(), await readJson(req));
+        return send(res, 200, { id: r.id });
+      }
+      const vote = url.pathname.match(/^\/reports\/(\d+)\/vote$/);
+      if (req.method === 'POST' && vote) {
+        const r = community.vote(needUser(), vote[1], !!(await readJson(req)).stillThere);
+        return send(res, 200, { id: r.id, up: r.up, down: r.down });
+      }
+
+      // ----- Ograniczenia prędkości: zgłoszenia i zatwierdzanie -----
+      if (req.method === 'POST' && url.pathname === '/limits/report') {
+        const r = community.reportLimit(needUser(), await readJson(req));
+        return send(res, 200, { id: r.id, status: r.status });
+      }
+      if (req.method === 'GET' && url.pathname === '/limits/pending') {
+        needAdmin();
+        return send(res, 200, { pending: community.pendingLimits() });
+      }
+      const decide = url.pathname.match(/^\/limits\/(\d+)\/decide$/);
+      if (req.method === 'POST' && decide) {
+        const r = community.decideLimit(needAdmin(), decide[1], !!(await readJson(req)).approve);
+        return send(res, 200, { id: r.id, status: r.status });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/limit/at') {
+        return send(res, 200, await router.limitAt((await readJson(req)).points));
+      }
+
+      // ----- Anonimowe próbki prędkości (korki od kierowców) -----
+      if (req.method === 'POST' && url.pathname === '/speed') {
+        const b = await readJson(req);
+        const n = community.addSpeedSamples(String(b.dev || '').slice(0, 40) || 'anon', b.samples);
+        return send(res, 200, { accepted: n });
+      }
+
+      // ----- Panel admina (przeglądarka na komputerze z serwerem, klucz serwera) -----
+      if (url.pathname === '/admin') {
+        if (!serverKeyOk || !token) return send(res, 401, { error: 'Zły klucz API' });
+        if (req.method === 'POST') {
+          const b = await readJson(req);
+          if (b.userId && b.role) community.setRole(b.userId, b.role);
+          if (b.limitId) community.decideLimit({ role: 'admin', id: 0 }, b.limitId, !!b.approve);
+          return send(res, 200, { ok: true });
+        }
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(adminPage(db.data, token));
+      }
 
       // Strona konfiguracji z kodem QR (otwiera ją start.bat na komputerze z serwerem).
       if (req.method === 'GET' && url.pathname === '/setup') {
@@ -110,7 +188,7 @@ h2{margin:0 0 12px;font-size:18px}svg{display:block;border-radius:8px;max-width:
 <main>${card('Przez internet (w trasie)', tunnel, 'Adres zmienia się po restarcie serwera — wtedy zeskanuj ponownie.') ||
   '<section><h2 class="warn">Tunel jeszcze nie gotowy</h2><p class="n">Odśwież stronę za kilka sekund.</p></section>'}
 ${card('W tej samej sieci Wi-Fi', lan, 'Działa tylko w zasięgu domowego Wi-Fi.')}</main>
-<div class="k">Klucz API: <code>${esc(cfg.apiToken)}</code></div>
+<div class="k">Klucz API: <code>${esc(cfg.apiToken)}</code> · <a style="color:#ffc629" href="/admin?k=${encodeURIComponent(cfg.apiToken)}">Panel admina</a></div>
 </body></html>`;
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         return res.end(html);
@@ -174,12 +252,30 @@ ${card('W tej samej sieci Wi-Fi', lan, 'Działa tylko w zasięgu domowego Wi-Fi.
   });
 }
 
+function adminPage(D, key) {
+  const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const when = (t) => new Date(t).toLocaleString('pl-PL');
+  const users = D.users.map((u) => `<tr><td>${u.id}</td><td>${esc(u.name)}</td><td>${u.blocked ? '<b class="bad">zablokowany</b>' : u.role === 'admin' ? '<b class="ok">admin</b>' : 'kierowca'}</td><td>${when(u.created)}</td>
+    <td><button onclick="act({userId:${u.id},role:'admin'})">Admin</button><button onclick="act({userId:${u.id},role:'driver'})">Kierowca</button><button class="bad" onclick="act({userId:${u.id},role:'blocked'})">Zablokuj</button></td></tr>`).join('');
+  const pend = D.limitReports.filter((r) => r.status === 'pending').map((r) => `<tr><td>${when(r.created)}</td><td>${esc(r.userName)}</td><td><b>${r.value} km/h</b></td>
+    <td><a target="_blank" href="https://www.openstreetmap.org/?mlat=${r.lat}&mlon=${r.lon}#map=18/${r.lat}/${r.lon}">mapa</a> ${r.heading != null ? `(kierunek ${r.heading}°)` : ''}</td><td>${esc(r.note)}</td>
+    <td><button class="ok" onclick="act({limitId:${r.id},approve:true})">Zatwierdź</button><button class="bad" onclick="act({limitId:${r.id},approve:false})">Odrzuć</button></td></tr>`).join('') || '<tr><td colspan="6">Brak zgłoszeń do zatwierdzenia</td></tr>';
+  return `<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TaxiNav — admin</title>
+<style>body{background:#15171c;color:#f3f4f6;font:15px system-ui,Segoe UI,sans-serif;padding:20px}h1 span{color:#ffc629}table{border-collapse:collapse;width:100%;margin:8px 0 28px}
+td,th{border-bottom:1px solid #2a2f38;padding:8px;text-align:left}button{margin-right:6px;background:#262b35;color:#fff;border:1px solid #3a404c;border-radius:6px;padding:5px 10px;cursor:pointer}
+.ok{color:#2e9e5b}.bad{color:#e5482f}a{color:#ffc629}</style></head><body><h1><span>Taxi</span>Nav — panel admina</h1>
+<h2>Zgłoszone zmiany ograniczeń prędkości</h2><table><tr><th>Kiedy</th><th>Kto</th><th>Limit</th><th>Gdzie</th><th>Uwagi</th><th></th></tr>${pend}</table>
+<h2>Kierowcy (${D.users.length})</h2><table><tr><th>#</th><th>Imię/kod</th><th>Rola</th><th>Rejestracja</th><th></th></tr>${users}</table>
+<script>async function act(b){await fetch('/admin?k=${encodeURIComponent(key)}',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});location.reload()}</script></body></html>`;
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const cfg = {
     port: +(process.env.PORT || 8080),
     valhallaUrl: process.env.VALHALLA_URL || 'http://localhost:8002',
     photonUrl: process.env.PHOTON_URL || 'https://photon.komoot.io',
     addressFile: process.env.ADDRESS_FILE || '../data/addresses.tsv',
+    dbFile: process.env.DB_FILE || '../data/db.json',
     tunnelMetricsUrl: process.env.TUNNEL_METRICS_URL || '',
     tomtomKey: process.env.TOMTOM_API_KEY || '',
     tomtomBase: process.env.TOMTOM_BASE || 'https://api.tomtom.com',

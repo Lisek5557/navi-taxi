@@ -93,4 +93,35 @@ class NavigationEngineTest {
         assertEquals("350 m", Speech.short(347.0))
         assertEquals("1,2 km", Speech.short(1234.0))
     }
+
+    @Test fun speedLimitLanesAndProjection() {
+        val r = route.copy(
+            limits = listOf(LimitRange(0, 9, 50), LimitRange(10, 15, 30, override = true)),
+            lanes = listOf(LaneInfo(10, listOf(Lane(listOf("left"), false), Lane(listOf("straight", "right"), true)))),
+        )
+        val e = NavigationEngine(r, {}, announceStart = false)
+        val far = e.update(at(100.0))
+        assertEquals(50, far.speedLimit)
+        assertEquals(null, far.lanes)                       // 900 m do skrzyżowania — za daleko
+        val near = e.update(at(800.0))
+        assertEquals(2, near.lanes!!.lanes.size)
+        assertEquals(200.0, near.distanceToLanesM, 15.0)
+        assertEquals(30, e.update(at(1000.0, 250.0)).speedLimit)
+        val (along, dist) = e.project(at(500.0, 20.0))
+        assertEquals(500.0, along, 15.0)
+        assertEquals(20.0, dist, 3.0)
+        assertEquals("↑→", Lanes.label(Lane(listOf("straight", "right"), true)))
+    }
+
+    @Test fun intermediateStopIsAnnounced() {
+        val said = ArrayList<String>()
+        val r = route.copy(maneuvers = listOf(
+            route.maneuvers[0],
+            Maneuver(4, "Przystanek 1", "Przystanek 1.", "Dotarłeś do przystanku 1.", 10, 0, emptyList(), stop = 1),
+            route.maneuvers[2],
+        ))
+        val e = NavigationEngine(r, { said += it }, announceStart = false)
+        e.update(at(960.0), speedMps = 8.0)
+        assertEquals("Dotarłeś do przystanku 1.", said.last())
+    }
 }

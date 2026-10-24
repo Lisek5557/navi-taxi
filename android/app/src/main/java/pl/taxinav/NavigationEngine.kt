@@ -13,6 +13,12 @@ data class NavState(
     val remainingS: Double,
     val snapped: LatLon,
     val traveledIndex: Int,
+    /** Obowiązujące ograniczenie prędkości (km/h) albo null. */
+    val speedLimit: Int? = null,
+    /** Pasy przed najbliższym skrzyżowaniem (w zasięgu 350 m) i odległość do niego. */
+    val lanes: LaneInfo? = null,
+    val distanceToLanesM: Double = 0.0,
+    val alongM: Double = 0.0,
 )
 
 /**
@@ -73,7 +79,7 @@ class NavigationEngine(
         } else if (next != null && !offRoute) {
             val farDist = if (speedMps > 22) 1500.0 else if (speedMps > 14) 800.0 else 400.0
             val nearDist = max(60.0, speedMps * 7)
-            val isDestination = next.type in 4..6
+            val isDestination = next.type in 4..6 && next.stop == null
             if (distToNext <= nearDist && nextIdx !in saidNear) {
                 saidNear += nextIdx; saidFar += nextIdx
                 if (!isDestination) speak(next.verbalPre)
@@ -83,11 +89,24 @@ class NavigationEngine(
             }
         }
 
+        val limit = route.limits.firstOrNull { best.seg >= it.from && best.seg <= it.to }?.limit
+        val lane = route.lanes.firstOrNull { cum[it.index.coerceIn(0, pts.size - 1)] >= along - 5 }
+        val laneDist = lane?.let { cum[it.index.coerceIn(0, pts.size - 1)] - along } ?: 0.0
+        val laneShown = if (lane != null && laneDist <= 350) lane else null
+
         val snapped = LatLon(
             pts[best.seg].lat + best.t * (pts[best.seg + 1].lat - pts[best.seg].lat),
             pts[best.seg].lon + best.t * (pts[best.seg + 1].lon - pts[best.seg].lon),
         )
-        return NavState(best.dist, offRoute, arrived, next, distToNext, remaining, remainingS, snapped, best.seg)
+        return NavState(best.dist, offRoute, arrived, next, distToNext, remaining, remainingS, snapped, best.seg,
+            limit, laneShown, laneDist, along)
+    }
+
+    /** Rzut dowolnego punktu na trasę: (dystans wzdłuż trasy w m, odległość od trasy w m). */
+    fun project(p: LatLon): Pair<Double, Double> {
+        val h = nearest(p, 0, pts.size - 2)
+        if (pts.size < 2) return Pair(0.0, h.dist)
+        return Pair(cum[h.seg] + h.t * (cum[h.seg + 1] - cum[h.seg]), h.dist)
     }
 
     private data class Hit(val seg: Int, val dist: Double, val t: Double)

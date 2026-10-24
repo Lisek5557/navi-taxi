@@ -9,54 +9,74 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Wyszukiwanie (tryb przeglądania) -->
+    <!-- Wyszukiwanie + szybkie cele (tryb przeglądania) -->
     <LinearLayout
         android:id="@+id/searchPanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_margin="12dp"
-        android:background="@drawable/panel"
-        android:elevation="6dp"
         android:orientation="vertical">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:background="@drawable/panel"
+            android:elevation="6dp"
+            android:orientation="vertical">
 
-            <EditText
-                android:id="@+id/searchInput"
-                android:layout_width="0dp"
-                android:layout_height="56dp"
-                android:layout_weight="1"
-                android:background="@android:color/transparent"
-                android:hint="@string/search_hint"
-                android:imeOptions="actionSearch"
-                android:inputType="textPostalAddress"
-                android:paddingHorizontal="16dp"
-                android:textColor="@color/text"
-                android:textColorHint="@color/text_secondary"
-                android:textSize="18sp" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-            <ImageButton
-                android:id="@+id/settingsButton"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="@string/settings"
-                android:src="@android:drawable/ic_menu_preferences"
-                app:tint="@color/text" />
+                <EditText
+                    android:id="@+id/searchInput"
+                    android:layout_width="0dp"
+                    android:layout_height="56dp"
+                    android:layout_weight="1"
+                    android:background="@android:color/transparent"
+                    android:hint="@string/search_hint"
+                    android:imeOptions="actionSearch"
+                    android:inputType="textPostalAddress"
+                    android:paddingHorizontal="16dp"
+                    android:textColor="@color/text"
+                    android:textColorHint="@color/text_secondary"
+                    android:textSize="18sp" />
+
+                <ImageButton
+                    android:id="@+id/settingsButton"
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/settings"
+                    android:src="@android:drawable/ic_menu_preferences"
+                    app:tint="@color/text" />
+            </LinearLayout>
+
+            <ListView
+                android:id="@+id/results"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone" />
         </LinearLayout>
 
-        <ListView
-            android:id="@+id/results"
+        <HorizontalScrollView
+            android:id="@+id/favScroll"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:visibility="gone" />
+            android:layout_marginTop="8dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/favRow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
     </LinearLayout>
 
-    <!-- Baner manewru (tryb nawigacji) -->
+    <!-- Baner manewru + pasy ruchu (tryb nawigacji) -->
     <LinearLayout
         android:id="@+id/navBanner"
         android:layout_width="match_parent"
@@ -64,52 +84,112 @@
         android:layout_margin="12dp"
         android:background="@drawable/banner"
         android:elevation="6dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:padding="14dp"
+        android:orientation="vertical"
+        android:padding="12dp"
         android:visibility="gone">
 
-        <TextView
-            android:id="@+id/arrow"
-            android:layout_width="72dp"
-            android:layout_height="wrap_content"
-            android:gravity="center"
-            android:text="↑"
-            android:textColor="@android:color/white"
-            android:textSize="52sp"
-            android:textStyle="bold" />
-
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical">
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
             <TextView
-                android:id="@+id/distToNext"
-                android:layout_width="wrap_content"
+                android:id="@+id/arrow"
+                android:layout_width="64dp"
                 android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="↑"
                 android:textColor="@android:color/white"
-                android:textSize="34sp"
+                android:textSize="48sp"
                 android:textStyle="bold" />
 
-            <TextView
-                android:id="@+id/instruction"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:maxLines="3"
-                android:textColor="@android:color/white"
-                android:textSize="18sp" />
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/distToNext"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@android:color/white"
+                    android:textSize="32sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/instruction"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:maxLines="3"
+                    android:textColor="@android:color/white"
+                    android:textSize="18sp" />
+            </LinearLayout>
         </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/lanesRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/lanes_bg"
+            android:orientation="horizontal"
+            android:paddingHorizontal="6dp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- Znak ograniczenia prędkości + aktualna prędkość (dotknij, aby zgłosić zmianę) -->
+    <LinearLayout
+        android:id="@+id/speedBox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="start|center_vertical"
+        android:layout_marginStart="12dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/speedLimit"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:background="@drawable/speed_sign"
+            android:gravity="center"
+            android:textColor="@android:color/black"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/currentSpeed"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/panel"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:textColor="@color/text"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
     </LinearLayout>
 
     <!-- Przyciski boczne -->
     <LinearLayout
+        android:id="@+id/sideButtons"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="end|center_vertical"
         android:layout_marginEnd="12dp"
         android:orientation="vertical">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/reportButton"
+            style="@style/RoundButton"
+            android:text="⚠"
+            android:textColor="@android:color/black"
+            app:backgroundTint="@color/accent" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/themeButton"
@@ -132,7 +212,45 @@
             android:text="◎" />
     </LinearLayout>
 
-    <!-- Dolny panel: wybór wariantu trasy, podsumowanie, przyciski -->
+    <!-- „Nadal jest?” przy mijaniu zgłoszenia -->
+    <LinearLayout
+        android:id="@+id/voteBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal|bottom"
+        android:layout_marginBottom="200dp"
+        android:background="@drawable/panel"
+        android:elevation="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="10dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/voteText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            android:textColor="@color/text"
+            android:textSize="16sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/voteYes"
+            android:layout_width="wrap_content"
+            android:layout_height="52dp"
+            android:backgroundTint="@color/traffic_jam"
+            android:text="Jest" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/voteNo"
+            android:layout_width="wrap_content"
+            android:layout_height="52dp"
+            android:layout_marginStart="6dp"
+            android:backgroundTint="#FF3A404C"
+            android:text="Nie ma" />
+    </LinearLayout>
+
+    <!-- Dolny panel: wybór wariantu trasy, przystanki, podsumowanie, przyciski -->
     <LinearLayout
         android:id="@+id/bottomPanel"
         android:layout_width="match_parent"
@@ -149,7 +267,7 @@
             android:id="@+id/routeOptions"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="10dp"
+            android:layout_marginBottom="8dp"
             android:orientation="horizontal">
 
             <TextView
@@ -165,6 +283,41 @@
                 android:id="@+id/optShortest"
                 style="@style/RouteOption"
                 android:layout_marginStart="6dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/stopsRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="6dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/stopsInfo"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:maxLines="2"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/addStopButton"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:text="+ Przystanek"
+                android:textSize="13sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/editStopsButton"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:text="Kolejność"
+                android:textSize="13sp"
+                android:visibility="gone" />
         </LinearLayout>
 
         <TextView

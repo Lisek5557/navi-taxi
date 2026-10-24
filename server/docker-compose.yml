@@ -38,6 +38,7 @@ services:
       - ./data:/data        # addresses.tsv — lokalna baza adresów
     environment:
       - ADDRESS_FILE=/data/addresses.tsv
+      - DB_FILE=/data/db.json
       - TUNNEL_METRICS_URL=http://tunnel:2000
       - VALHALLA_URL=http://valhalla:8002
       - PHOTON_URL=https://photon.komoot.io

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- przekroczenie: czerwone tło -->
+    <item android:state_activated="true">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFD6D1" />
+            <stroke android:width="7dp" android:color="#FFE5482F" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFFFF" />
+            <stroke android:width="6dp" android:color="#FFD32F2F" />
+        </shape>
+    </item>
+</selector>

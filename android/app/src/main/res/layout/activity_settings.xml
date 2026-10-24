@@ -80,6 +80,92 @@
             android:textColor="@color/text"
             android:textSize="15sp" />
 
+        <!-- Konto kierowcy -->
+        <TextView
+            style="@style/Label"
+            android:layout_marginTop="28dp"
+            android:text="Twoje konto (zgłoszenia na mapie, ograniczenia prędkości)"
+            android:textColor="@color/text" />
+
+        <TextView
+            android:id="@+id/accountInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textColor="@color/text"
+            android:textSize="16sp" />
+
+        <LinearLayout
+            android:id="@+id/registerRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/nameInput"
+                style="@style/Field"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:hint="Imię albo kod kierowcy"
+                android:inputType="textPersonName" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/registerButton"
+                android:layout_width="wrap_content"
+                android:layout_height="56dp"
+                android:layout_marginStart="8dp"
+                android:layout_marginTop="6dp"
+                android:text="Załóż konto" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/adminButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="10dp"
+            android:text="Admin: zgłoszenia do zatwierdzenia"
+            android:visibility="gone" />
+
+        <!-- Mapa offline -->
+        <TextView
+            style="@style/Label"
+            android:layout_marginTop="28dp"
+            android:text="Mapa offline (bez zasięgu)"
+            android:textColor="@color/text" />
+
+        <TextView
+            android:id="@+id/offlineInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Kujawsko-pomorskie, ok. 150–300 MB. Pobieraj przez Wi-Fi. Trasy nadal liczy serwer."
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/offlineButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="56dp"
+                android:layout_marginTop="8dp"
+                android:layout_weight="1"
+                android:text="Pobierz mapę offline" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/offlineDelete"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="56dp"
+                android:layout_marginTop="8dp"
+                android:text="Usuń" />
+        </LinearLayout>
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/saveButton"
             android:layout_width="match_parent"
