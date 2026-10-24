@@ -61,6 +61,20 @@ docker compose restart api
 
 Dane adresowe: © współtwórcy OpenStreetMap, licencja ODbL.
 
+
+## Wersja 0.5 — nowe funkcje
+
+- **Nawigacja w tle**: działa przy wygaszonym ekranie i w trakcie rozmowy (usługa z powiadomieniem pokazującym najbliższy manewr). Po wyjściu z aplikacji podczas nawigacji pojawia się **małe okienko** (obraz w obrazie), jak w Google Maps.
+- **Przystanki**: „+ Przystanek” w dolnym panelu (do 8), „Kolejność” do przestawiania/usuwania. Głos zapowiada „Dotarłeś do przystanku 1”.
+- **Szybkie cele**: pasek pod wyszukiwarką, każdy kierowca ma swoje. Wybierz cel → „+ Dodaj ulubione”. Przytrzymaj, aby usunąć.
+- **Zgłoszenia jak w Yanosiku** (żółty przycisk ⚠): kontrola, wypadek, utrudnienie, zamknięta ulica. Wygasają po 2–12 h, głos ostrzega na trasie, przy mijaniu pytanie „nadal jest?”.
+- **Ograniczenia prędkości**: znak na ekranie (także bez trasy), ostrzeżenie przy przekroczeniu o >5 km/h. Dotknij znaku, aby zgłosić inne ograniczenie — zatwierdza admin.
+- **Pasy ruchu**: strzałki pasów w banerze ~350 m przed skrzyżowaniem.
+- **Konta**: Ustawienia → „Załóż konto” (bez akceptacji). **Pierwsze założone konto jest adminem.** Panel admina: `admin.bat` albo w aplikacji Ustawienia → Admin.
+- **Korki od kierowców**: anonimowe prędkości z telefonów (≥3 próbki z ≥2 telefonów w 15 min) mają pierwszeństwo przed TomTom.
+- **Mapa offline**: Ustawienia → „Pobierz mapę offline” (kujawsko-pomorskie). Trasy nadal liczy serwer.
+- **Otwieranie z innych aplikacji**: `geo:`, linki Google Maps (także maps.app.goo.gl), „Udostępnij → TaxiNav”.
+
 ## Testy
 
 ```
