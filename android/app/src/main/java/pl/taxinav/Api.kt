@@ -159,6 +159,9 @@ class Api(private val server: String, private val key: String, private val userT
         if (j.isNull("limit")) null else j.getInt("limit")
     }
 
+    /** Strefy rabatowe (GeoJSON) do pokazania na mapie. */
+    suspend fun discountZones(): String = withContext(Dispatchers.IO) { request("GET", "/fare/zones", null) }
+
     // ---- Korki od kierowców ----
     suspend fun sendSpeed(dev: String, samples: JSONArray) = withContext(Dispatchers.IO) {
         request("POST", "/speed", JSONObject().put("dev", dev).put("samples", samples).toString()); Unit
@@ -248,6 +251,20 @@ class Api(private val server: String, private val key: String, private val userT
                     })
                 },
                 stops = o.optInt("stops"),
+                fare = o.optJSONObject("fare")?.let { f ->
+                    val flat = f.optJSONObject("flat")
+                    Fare(
+                        total = f.optDouble("total"), before = f.optDouble("before"), startFee = f.optDouble("startFee"),
+                        cityKm = f.optDouble("cityKm"), outKm = f.optDouble("outKm"), cityCost = f.optDouble("cityCost"), outCost = f.optDouble("outCost"),
+                        trafficMin = f.optInt("trafficMin"), trafficCost = f.optDouble("trafficCost"),
+                        night = f.optBoolean("night"), tariffCity = f.optInt("tariffCity", 1), tariffOut = f.optInt("tariffOut", 3),
+                        discountPct = f.optInt("discountPct"), discountReason = f.optString("discountReason").takeIf { it.isNotBlank() && it != "null" },
+                        flatCity = flat?.optString("city"), flatValue = flat?.optDouble("value"),
+                        districtA = f.optString("districtA").takeIf { it.isNotBlank() && it != "null" },
+                        districtB = f.optString("districtB").takeIf { it.isNotBlank() && it != "null" },
+                        tariffName = f.optString("tariffName"),
+                    )
+                },
             )
         }
     }

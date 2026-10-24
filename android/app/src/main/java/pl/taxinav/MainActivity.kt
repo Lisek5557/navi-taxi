@@ -64,6 +64,7 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.module.http.HttpRequestUtil
 import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.Layer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
@@ -347,6 +348,8 @@ class MainActivity : AppCompatActivity() {
             pickPlace(p)
         }
         startButton.setOnClickListener { if (navigating) stopNavigation() else startNavigation() }
+        summary.setOnClickListener { if (!navigating) showFareDetails() }
+        summaryDetail.setOnClickListener { if (!navigating) showFareDetails() }
         cancelButton.setOnClickListener { clearRoute() }
         trafficButton.setOnClickListener {
             Prefs.setTrafficLayer(this, !Prefs.trafficLayer(this))
@@ -368,9 +371,16 @@ class MainActivity : AppCompatActivity() {
         s.addSource(GeoJsonSource("route-src"))
         s.addSource(GeoJsonSource("stops-src"))
         s.addSource(GeoJsonSource("reports-src"))
+        s.addSource(GeoJsonSource("discount-src"))
         // Trasa pod napisami (nazwy ulic i numery domów zostają widoczne).
         val below = s.layers.firstOrNull { it is SymbolLayer }?.id
         val add = { layer: Layer -> if (below != null) s.addLayerBelow(layer, below) else s.addLayer(layer) }
+        // Strefy rabatowe (ustawia admin) — delikatnie zielone.
+        add(FillLayer("discount-fill", "discount-src").withProperties(
+            PropertyFactory.fillColor("#2E9E5B"), PropertyFactory.fillOpacity(0.10f)))
+        add(LineLayer("discount-line", "discount-src").withProperties(
+            PropertyFactory.lineColor("#2E9E5B"), PropertyFactory.lineWidth(2f), PropertyFactory.lineOpacity(0.6f),
+            PropertyFactory.lineDasharray(arrayOf(2f, 2f))))
         add(LineLayer("alt-line", "alt-src").withProperties(
             PropertyFactory.lineColor("#8A93A3"),
             PropertyFactory.lineWidth(6f),
@@ -416,6 +426,19 @@ class MainActivity : AppCompatActivity() {
         updateTrafficLayer(s)
         drawReports()
         drawStops()
+        loadDiscountZones()
+    }
+
+    private var discountJson: String? = null
+    private fun loadDiscountZones() {
+        discountJson?.let { style?.getSourceAs<GeoJsonSource>("discount-src")?.setGeoJson(it) }
+        if (Prefs.server(this).isBlank()) return
+        lifecycleScope.launch {
+            runCatching { Api.from(this@MainActivity).discountZones() }.getOrNull()?.let {
+                discountJson = it
+                style?.getSourceAs<GeoJsonSource>("discount-src")?.setGeoJson(it)
+            }
+        }
     }
 
     private fun iconBitmap(text: String, bg: Int): Bitmap {
@@ -930,13 +953,15 @@ class MainActivity : AppCompatActivity() {
         for (mode in RouteModes.ALL) {
             val v = optViews[mode] ?: continue
             val m = resp.routeFor(mode)
-            v.text = "${RouteModes.label(mode)}\n${minutes(m.trafficTimeS)} · ${Speech.short(m.distanceM.toDouble())}"
+            v.text = "${RouteModes.label(mode)}\n${minutes(m.trafficTimeS)} · ${Speech.short(m.distanceM.toDouble())}" +
+                (m.fare?.let { "\n≈ ${Fare.zlShort(it.shown)}" } ?: "")
             v.isSelected = mode == routeMode
         }
         stopsInfo.text = if (stops.isEmpty()) "Cel: ${destPlace?.label ?: ""}"
         else stops.mapIndexed { i, p -> "${i + 1}. ${p.label}" }.joinToString(" → ") + " → 🏁 ${destPlace?.label ?: ""}"
         editStopsButton.visibility = if (stops.isNotEmpty()) View.VISIBLE else View.GONE
-        summary.text = "${minutes(r.trafficTimeS)} · ${Speech.short(r.distanceM.toDouble())}"
+        summary.text = "${minutes(r.trafficTimeS)} · ${Speech.short(r.distanceM.toDouble())}" +
+            (r.fare?.let { f -> "  ·  ≈ ${Fare.zl(f.shown)}" + if (f.flatValue != null) " (ryczałt)" else "" } ?: "")
         val delayS = r.trafficTimeS - r.baseTimeS
         summaryDetail.text = buildString {
             append(when (routeMode) {
@@ -946,7 +971,32 @@ class MainActivity : AppCompatActivity() {
             })
             if (r.hasTraffic) append(if (delayS >= 60) " · korki +${delayS / 60} min" else " · bez korków")
             else append(" · brak danych o korkach")
+            r.fare?.let { f ->
+                append("\nCena szacunkowa · taryfa ${f.tariffCity}${if (f.outKm > 0.05) "/${f.tariffOut}" else ""}")
+                if (f.discountPct > 0) append(" · rabat ${f.discountPct}%")
+                append(" — dotknij, aby zobaczyć wyliczenie")
+            }
         }
+    }
+
+    /** Rozbicie szacowanej ceny jak w kalkulatorze taryf. */
+    private fun showFareDetails() {
+        val r = routeResp?.chosen ?: return
+        val f = r.fare ?: return
+        fun z(v: Double) = Fare.zl(v)
+        val txt = buildString {
+            append("Opłata początkowa: ${z(f.startFee)}\n")
+            append("Taryfa ${f.tariffCity} · miejska (${"%.2f".format(f.cityKm)} km): ${z(f.cityCost)}\n")
+            if (f.outKm > 0.01) append("Taryfa ${f.tariffOut} · zamiejska (${"%.2f".format(f.outKm)} km): ${z(f.outCost)}\n")
+            if (f.trafficMin > 0) append("Korki / postój (~${f.trafficMin} min): ${z(f.trafficCost)}\n")
+            if (f.discountPct > 0) append("Rabat −${f.discountPct}% (${f.discountReason ?: ""}): −${z(f.before - f.total)}\n")
+            append("\nRAZEM (taksometr): ${z(f.total)}\n")
+            if (f.flatValue != null) append("Ryczałt ${f.flatCity?.replaceFirstChar { it.uppercase() }}: ${z(f.flatValue)}\n")
+            append("\n${if (f.night) "Taryfa nocna / niedziela / święto" else "Taryfa dzienna"} · ${f.tariffName}")
+            if (f.districtA != null || f.districtB != null) append("\nStart: ${f.districtA ?: "—"}\nCel: ${f.districtB ?: "—"}")
+            append("\n\nTo szacunek — kwota na taksometrze zależy od faktycznej trasy i postojów.")
+        }
+        AlertDialog.Builder(this).setTitle("Szacowana cena").setMessage(txt).setPositiveButton("OK", null).show()
     }
 
     private fun clearRoute() {

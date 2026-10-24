@@ -34,6 +34,12 @@ if (-not (Test-Path ".env")) {
     Write-Host "Utworzono .env z nowym kluczem API." -ForegroundColor Green
     Write-Host "Wpisz do .env TOMTOM_API_KEY (darmowy z developer.tomtom.com), zeby widziec korki." -ForegroundColor Yellow
 }
+if (-not ((Get-Content ".env") -match '^ADMIN_TOKEN=.+')) {
+    $adm = -join ((48..57) + (97..122) | Get-Random -Count 28 | ForEach-Object { [char]$_ })
+    $lines = @(Get-Content ".env" | Where-Object { $_ -notmatch '^ADMIN_TOKEN=' }) + "ADMIN_TOKEN=$adm"
+    Set-Content -Path ".env" -Value $lines -Encoding ascii
+    Write-Host "Dodano ADMIN_TOKEN (panel admina: admin.bat)." -ForegroundColor Green
+}
 $token = ((Get-Content ".env") | Where-Object { $_ -match '^API_TOKEN=' }) -replace '^API_TOKEN=', ''
 
 # 4. Start

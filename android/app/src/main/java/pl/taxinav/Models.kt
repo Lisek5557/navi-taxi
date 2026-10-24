@@ -37,7 +37,26 @@ data class Route(
     val limits: List<LimitRange> = emptyList(),
     val lanes: List<LaneInfo> = emptyList(),
     val stops: Int = 0,
+    val fare: Fare? = null,
 )
+
+/** Szacowana cena kursu (zasady z kalkulatora taryf). */
+data class Fare(
+    val total: Double, val before: Double, val startFee: Double,
+    val cityKm: Double, val outKm: Double, val cityCost: Double, val outCost: Double,
+    val trafficMin: Int, val trafficCost: Double,
+    val night: Boolean, val tariffCity: Int, val tariffOut: Int,
+    val discountPct: Int, val discountReason: String?,
+    val flatCity: String?, val flatValue: Double?,
+    val districtA: String?, val districtB: String?, val tariffName: String,
+) {
+    companion object {
+        fun zl(v: Double) = String.format(java.util.Locale.forLanguageTag("pl-PL"), "%.2f zł", v)
+        fun zlShort(v: Double) = "${Math.round(v)} zł"
+    }
+    /** Kwota do pokazania: ryczałt, jeśli jest, inaczej taksometr. */
+    val shown: Double get() = flatValue ?: total
+}
 
 data class RouteResponse(
     val chosen: Route,

@@ -113,7 +113,7 @@ export function extractLanes(osrm, points) {
   return out;
 }
 
-export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, tolerancePct, maxExtraSec, community = null }) {
+export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, tolerancePct, maxExtraSec, community = null, fare = null }) {
   async function call(path, body, timeout = 15000) {
     const r = await fetchImpl(`${valhallaUrl}${path}`, {
       method: 'POST',
@@ -182,6 +182,7 @@ export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, toleranceP
       c.hasTraffic = t.hasData;
     }));
 
+    if (fare) for (const c of cands) c.fare = fare.estimate(c.points, { trafficDelayS: c.trafficTime - c.baseTime });
     const chosen = pickReasonable(cands, { tolerancePct, maxExtraSec });
     const strip = (c) => ({
       kinds: c.kinds,
@@ -195,6 +196,7 @@ export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, toleranceP
       limits: c.limits,
       lanes: c.lanes,
       stops: c.stops,
+      fare: c.fare || null,
     });
     // Trzy warianty do wyboru w aplikacji (indeksy w `routes`; mogą wskazywać tę samą trasę).
     const argmin = (key, tie) => cands.reduce((best, c, i) =>

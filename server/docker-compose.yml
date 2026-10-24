@@ -44,6 +44,7 @@ services:
       - PHOTON_URL=https://photon.komoot.io
       - TOMTOM_API_KEY=${TOMTOM_API_KEY:-}
       - API_TOKEN=${API_TOKEN:?Ustaw API_TOKEN w pliku .env}
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - ROUTE_TOLERANCE_PCT=${ROUTE_TOLERANCE_PCT:-10}
       - ROUTE_MAX_EXTRA_SEC=${ROUTE_MAX_EXTRA_SEC:-180}
 

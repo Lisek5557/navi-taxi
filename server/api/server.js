@@ -7,19 +7,45 @@ import { qrSvg } from './lib/qr.js';
 import { buildStyle } from './lib/style.js';
 import { openDb } from './lib/db.js';
 import { makeCommunity, REPORT_TYPES } from './lib/community.js';
+import { makeFare, loadZones, DEFAULT_TARIFF, DEFAULT_DISCOUNT_ZONES } from './lib/fare.js';
 
 export function createServer(cfg, deps = {}) {
   const fetchImpl = deps.fetchImpl || fetch;
   const traffic = makeTraffic({ apiKey: cfg.tomtomKey, fetchImpl, baseUrl: cfg.tomtomBase });
   const db = deps.db || openDb(cfg.dbFile);
   const community = makeCommunity(db, deps.now ? { now: deps.now } : {});
+  const geocoder = deps.geocoder !== undefined ? deps.geocoder : loadGeocoder(cfg.addressFile);
+  if (!db.data.tariff) db.data.tariff = structuredClone(DEFAULT_TARIFF);
+  if (!db.data.discountZones) db.data.discountZones = structuredClone(DEFAULT_DISCOUNT_ZONES);
+  const zones = deps.zones || loadZones(cfg.zonesFile);
+  const fare = makeFare({
+    zones, getTariff: () => db.data.tariff, getDiscountZones: () => db.data.discountZones,
+    cityOf: (la, lo) => geocoder?.cityAt?.(la, lo) ?? null,
+  });
+  function applyFareConfig(b) {
+    const num = (v, d) => (Number.isFinite(+v) && v !== '' && v !== null ? +v : d);
+    if (b.tariff) {
+      const t = db.data.tariff, n = b.tariff;
+      for (const k of ['startFee', 'cityDay', 'cityNight', 'outDay', 'outNight', 'trafficHour', 'discountPercent', 'discountAutoOutKm', 'nightFrom', 'nightTo', 'stepKm']) {
+        if (k in n) t[k] = num(n[k], t[k]);
+      }
+      if ('nightSundays' in n) t.nightSundays = !!n.nightSundays;
+      if (typeof n.name === 'string') t.name = n.name.slice(0, 60);
+      if (Array.isArray(n.flatRates)) t.flatRates = n.flatRates.filter((r) => r && r.city).map((r) => ({ city: String(r.city).toLowerCase().trim(), day: num(r.day, 0), night: num(r.night, 0) }));
+    }
+    if (Array.isArray(b.discountZones)) {
+      db.data.discountZones = b.discountZones.filter((z) => z && z.name && (z.district || (Array.isArray(z.points) && z.points.length >= 3)))
+        .map((z, i) => ({ id: String(z.id || `z${Date.now()}${i}`), name: String(z.name).slice(0, 60), percent: Math.max(0, Math.min(100, num(z.percent, 0))),
+          ...(z.district ? { district: String(z.district) } : { points: z.points.map(([la, lo]) => [+la, +lo]) }) }));
+    }
+    db.save();
+  }
   const router = makeRouter({
-    valhallaUrl: cfg.valhallaUrl, fetchImpl, traffic, community,
+    valhallaUrl: cfg.valhallaUrl, fetchImpl, traffic, community, fare,
     tolerancePct: cfg.tolerancePct, maxExtraSec: cfg.maxExtraSec,
   });
   const tileCache = new Map(); // "z/x/y" -> {t, buf}
   const styles = { day: buildStyle('day'), night: buildStyle('night') };
-  const geocoder = deps.geocoder !== undefined ? deps.geocoder : loadGeocoder(cfg.addressFile);
   if (geocoder) console.log(`Lokalna baza adresów: ${geocoder.size} adresów`);
 
   async function photonSearch(q, near, timeoutMs) {
@@ -85,7 +111,9 @@ export function createServer(cfg, deps = {}) {
       // Autoryzacja: klucz serwera (z kodu QR) albo osobisty token kierowcy.
       const token = req.headers['x-api-key'] || url.searchParams.get('k');
       const user = community.userByToken(req.headers['x-user-token']);
-      const serverKeyOk = !cfg.apiToken || token === cfg.apiToken;
+      const serverKeyOk = !cfg.apiToken || token === cfg.apiToken || (cfg.adminToken && token === cfg.adminToken);
+      // Klucz admina jest osobny (tylko na komputerze z serwerem) — kierowcy mają w telefonach klucz serwera.
+      const adminKeyOk = !!token && token === (cfg.adminToken || cfg.apiToken);
       if (!serverKeyOk && !user) return send(res, 401, { error: 'Zły klucz API' });
       const needUser = () => {
         if (!user) throw Object.assign(new Error('Zarejestruj się w Ustawieniach'), { status: 401 });
@@ -139,6 +167,22 @@ export function createServer(cfg, deps = {}) {
         return send(res, 200, await router.limitAt((await readJson(req)).points));
       }
 
+      // ----- Wycena kursów: strefy rabatowe i cennik -----
+      if (req.method === 'GET' && url.pathname === '/fare/zones') return send(res, 200, fare.discountGeoJson());
+      if (req.method === 'GET' && url.pathname === '/fare/config') {
+        return send(res, 200, { tariff: db.data.tariff, discountZones: db.data.discountZones, districts: zones.districts.map((d) => d.id) });
+      }
+      if (req.method === 'POST' && url.pathname === '/fare/config') {
+        if (!adminKeyOk && user?.role !== 'admin') return send(res, 403, { error: 'Tylko dla admina' });
+        applyFareConfig(await readJson(req));
+        return send(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && url.pathname === '/fare/estimate') {
+        const b = await readJson(req);
+        if (!validPoint(b.from) || !validPoint(b.to)) return send(res, 400, { error: 'Podaj from/to' });
+        return send(res, 200, fare.estimate([[b.from.lat, b.from.lon], [b.to.lat, b.to.lon]]));
+      }
+
       // ----- Anonimowe próbki prędkości (korki od kierowców) -----
       if (req.method === 'POST' && url.pathname === '/speed') {
         const b = await readJson(req);
@@ -148,7 +192,7 @@ export function createServer(cfg, deps = {}) {
 
       // ----- Panel admina (przeglądarka na komputerze z serwerem, klucz serwera) -----
       if (url.pathname === '/admin') {
-        if (!serverKeyOk || !token) return send(res, 401, { error: 'Zły klucz API' });
+        if (!adminKeyOk) return send(res, 401, { error: 'Zły klucz admina (uruchom admin.bat na komputerze z serwerem)' });
         if (req.method === 'POST') {
           const b = await readJson(req);
           if (b.userId && b.role) community.setRole(b.userId, b.role);
@@ -156,7 +200,7 @@ export function createServer(cfg, deps = {}) {
           return send(res, 200, { ok: true });
         }
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        return res.end(adminPage(db.data, token));
+        return res.end(adminPage(db.data, token, zones));
       }
 
       // Strona konfiguracji z kodem QR (otwiera ją start.bat na komputerze z serwerem).
@@ -188,7 +232,7 @@ h2{margin:0 0 12px;font-size:18px}svg{display:block;border-radius:8px;max-width:
 <main>${card('Przez internet (w trasie)', tunnel, 'Adres zmienia się po restarcie serwera — wtedy zeskanuj ponownie.') ||
   '<section><h2 class="warn">Tunel jeszcze nie gotowy</h2><p class="n">Odśwież stronę za kilka sekund.</p></section>'}
 ${card('W tej samej sieci Wi-Fi', lan, 'Działa tylko w zasięgu domowego Wi-Fi.')}</main>
-<div class="k">Klucz API: <code>${esc(cfg.apiToken)}</code> · <a style="color:#ffc629" href="/admin?k=${encodeURIComponent(cfg.apiToken)}">Panel admina</a></div>
+<div class="k">Klucz API: <code>${esc(cfg.apiToken)}</code></div>
 </body></html>`;
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         return res.end(html);
@@ -252,7 +296,7 @@ ${card('W tej samej sieci Wi-Fi', lan, 'Działa tylko w zasięgu domowego Wi-Fi.
   });
 }
 
-function adminPage(D, key) {
+function adminPage(D, key, zones) {
   const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const when = (t) => new Date(t).toLocaleString('pl-PL');
   const users = D.users.map((u) => `<tr><td>${u.id}</td><td>${esc(u.name)}</td><td>${u.blocked ? '<b class="bad">zablokowany</b>' : u.role === 'admin' ? '<b class="ok">admin</b>' : 'kierowca'}</td><td>${when(u.created)}</td>
@@ -260,13 +304,74 @@ function adminPage(D, key) {
   const pend = D.limitReports.filter((r) => r.status === 'pending').map((r) => `<tr><td>${when(r.created)}</td><td>${esc(r.userName)}</td><td><b>${r.value} km/h</b></td>
     <td><a target="_blank" href="https://www.openstreetmap.org/?mlat=${r.lat}&mlon=${r.lon}#map=18/${r.lat}/${r.lon}">mapa</a> ${r.heading != null ? `(kierunek ${r.heading}°)` : ''}</td><td>${esc(r.note)}</td>
     <td><button class="ok" onclick="act({limitId:${r.id},approve:true})">Zatwierdź</button><button class="bad" onclick="act({limitId:${r.id},approve:false})">Odrzuć</button></td></tr>`).join('') || '<tr><td colspan="6">Brak zgłoszeń do zatwierdzenia</td></tr>';
+  const T = D.tariff || {};
+  const fld = (k, label, step = '0.01') => `<label>${label}<input type="number" step="${step}" id="t_${k}" value="${esc(T[k])}"></label>`;
+  const flat = (T.flatRates || []).map((r) => `${r.city};${r.day};${r.night}`).join('\n');
+  const data = JSON.stringify({ districts: zones.districts, city: zones.city, discountZones: D.discountZones || [] }).replace(/</g, '\\u003c');
   return `<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TaxiNav — admin</title>
-<style>body{background:#15171c;color:#f3f4f6;font:15px system-ui,Segoe UI,sans-serif;padding:20px}h1 span{color:#ffc629}table{border-collapse:collapse;width:100%;margin:8px 0 28px}
-td,th{border-bottom:1px solid #2a2f38;padding:8px;text-align:left}button{margin-right:6px;background:#262b35;color:#fff;border:1px solid #3a404c;border-radius:6px;padding:5px 10px;cursor:pointer}
-.ok{color:#2e9e5b}.bad{color:#e5482f}a{color:#ffc629}</style></head><body><h1><span>Taxi</span>Nav — panel admina</h1>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>body{background:#15171c;color:#f3f4f6;font:15px system-ui,Segoe UI,sans-serif;padding:20px;max-width:1200px;margin:auto}h1 span{color:#ffc629}h2{margin-top:34px}
+table{border-collapse:collapse;width:100%;margin:8px 0}td,th{border-bottom:1px solid #2a2f38;padding:8px;text-align:left}
+button{margin-right:6px;background:#262b35;color:#fff;border:1px solid #3a404c;border-radius:6px;padding:6px 12px;cursor:pointer}button.primary{background:#ffc629;color:#000;border:0;font-weight:700}
+.ok{color:#2e9e5b}.bad{color:#e5482f}a{color:#ffc629}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+label{display:flex;flex-direction:column;font-size:13px;color:#a3a9b5;gap:4px}input,textarea,select{background:#262b35;color:#fff;border:1px solid #3a404c;border-radius:6px;padding:7px;font:inherit}
+#map{height:460px;border-radius:12px;margin:10px 0}.zone{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #2a2f38}.zone input{width:70px}
+.hint{color:#a3a9b5;font-size:13px}.pill{background:#1f232b;border-radius:10px;padding:14px;margin-top:8px}</style></head><body>
+<h1><span>Taxi</span>Nav — panel admina</h1>
+
+<h2>Strefy rabatowe</h2>
+<p class="hint">Jeśli kurs <b>zaczyna się lub kończy</b> w strefie, rabat obejmuje część kilometrową (opłata początkowa bez rabatu). Kliknij rejon na mapie, aby dodać/usunąć go jako strefę. „Rysuj własną” — klikaj punkty obszaru, potem „Zakończ”.</p>
+<div id="map"></div>
+<div><button id="drawBtn">✏️ Rysuj własną strefę</button><button id="finishBtn" style="display:none">✔ Zakończ rysowanie</button>
+<button class="primary" onclick="saveZones()">Zapisz strefy</button></div>
+<div id="zones" class="pill"></div>
+
+<h2>Cennik (szacowanie cen w aplikacji)</h2>
+<div class="pill"><div class="grid">
+<label>Nazwa cennika<input id="t_name" value="${esc(T.name)}"></label>
+${fld('startFee', 'Opłata początkowa (zł)')}${fld('cityDay', 'Miejska — dzień, taryfa 1 (zł/km)')}${fld('cityNight', 'Miejska — noc, taryfa 2 (zł/km)')}
+${fld('outDay', 'Zamiejska — dzień, taryfa 3 (zł/km)')}${fld('outNight', 'Zamiejska — noc, taryfa 4 (zł/km)')}${fld('trafficHour', 'Postój/korki (zł/h)')}
+${fld('stepKm', 'Naliczanie co (km)', '0.05')}${fld('discountPercent', 'Rabat przy wyjeździe za miasto (%)', '1')}${fld('discountAutoOutKm', '…gdy poza miastem > (km), 0 = wył.', '0.1')}
+${fld('nightFrom', 'Noc od godziny', '1')}${fld('nightTo', 'Noc do godziny', '1')}
+<label>Niedziele i święta = noc<select id="t_nightSundays"><option value="1"${T.nightSundays ? ' selected' : ''}>tak</option><option value="0"${T.nightSundays ? '' : ' selected'}>nie</option></select></label>
+</div>
+<label style="margin-top:14px">Ryczałty — jedna linia: <code>miasto;dzień;noc</code><textarea id="flat" rows="10">${esc(flat)}</textarea></label>
+<p><button class="primary" onclick="saveTariff()">Zapisz cennik</button></p></div>
+
 <h2>Zgłoszone zmiany ograniczeń prędkości</h2><table><tr><th>Kiedy</th><th>Kto</th><th>Limit</th><th>Gdzie</th><th>Uwagi</th><th></th></tr>${pend}</table>
 <h2>Kierowcy (${D.users.length})</h2><table><tr><th>#</th><th>Imię/kod</th><th>Rola</th><th>Rejestracja</th><th></th></tr>${users}</table>
-<script>async function act(b){await fetch('/admin?k=${encodeURIComponent(key)}',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});location.reload()}</script></body></html>`;
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const KEY=${JSON.stringify(key)}; const DATA=${data};
+async function post(path,b){const r=await fetch(path+'?k='+encodeURIComponent(KEY),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});if(!r.ok)alert('Błąd: '+(await r.text()));return r.ok}
+async function act(b){await post('/admin',b);location.reload()}
+let zonesState=DATA.discountZones.map(z=>({...z}));
+const map=L.map('map').setView([53.1235,18.0084],11);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+DATA.city.forEach(c=>L.polygon(c.points,{color:'#ffc629',weight:2,fill:false,dashArray:'6 4'}).addTo(map).bindTooltip('Strefa miejska: '+c.id));
+const distLayers={};
+function zoneFor(id){return zonesState.find(z=>z.district===id)}
+function styleD(id){const z=zoneFor(id);return z?{color:'#2e9e5b',weight:2,fillColor:'#2e9e5b',fillOpacity:.35}:{color:'#8a93a3',weight:1,fillOpacity:.05}}
+DATA.districts.forEach(d=>{const l=L.polygon(d.points,styleD(d.id)).addTo(map);l.bindTooltip(d.id);distLayers[d.id]=l;
+ l.on('click',()=>{if(drawing)return;const z=zoneFor(d.id);if(z)zonesState=zonesState.filter(x=>x!==z);else zonesState.push({name:d.id.replace(/^Rejon \\d+ - /,''),percent:20,district:d.id});render()})});
+let customLayers=[];
+function render(){Object.entries(distLayers).forEach(([id,l])=>l.setStyle(styleD(id)));customLayers.forEach(l=>map.removeLayer(l));
+ customLayers=zonesState.filter(z=>z.points).map(z=>L.polygon(z.points,{color:'#2e9e5b',weight:3,fillOpacity:.35}).addTo(map).bindTooltip(z.name));
+ document.getElementById('zones').innerHTML=zonesState.length?zonesState.map((z,i)=>'<div class="zone"><input value="'+z.name.replace(/"/g,'&quot;')+'" onchange="zonesState['+i+'].name=this.value" style="width:240px"> rabat <input type="number" value="'+z.percent+'" onchange="zonesState['+i+'].percent=+this.value"> % <span class="hint">'+(z.district||'własny obszar')+'</span> <button onclick="zonesState.splice('+i+',1);render()">Usuń</button></div>').join(''):'<span class="hint">Brak stref rabatowych</span>'}
+let drawing=false,pts=[],tmp=null;
+document.getElementById('drawBtn').onclick=()=>{drawing=true;pts=[];document.getElementById('finishBtn').style.display='';map.getContainer().style.cursor='crosshair'};
+map.on('click',e=>{if(!drawing)return;pts.push([e.latlng.lat,e.latlng.lng]);if(tmp)map.removeLayer(tmp);tmp=L.polygon(pts,{color:'#ffc629'}).addTo(map)});
+document.getElementById('finishBtn').onclick=()=>{drawing=false;map.getContainer().style.cursor='';document.getElementById('finishBtn').style.display='none';if(tmp)map.removeLayer(tmp);
+ if(pts.length>=3){const name=prompt('Nazwa strefy','Strefa rabatowa')||'Strefa rabatowa';const pct=+prompt('Rabat %','20')||20;zonesState.push({name,percent:pct,points:pts})}render()};
+async function saveZones(){if(await post('/fare/config',{discountZones:zonesState}))alert('Zapisano strefy rabatowe')}
+async function saveTariff(){const g=k=>document.getElementById('t_'+k).value;const t={name:g('name')};
+ ['startFee','cityDay','cityNight','outDay','outNight','trafficHour','stepKm','discountPercent','discountAutoOutKm','nightFrom','nightTo'].forEach(k=>t[k]=g(k));
+ t.nightSundays=g('nightSundays')==='1';
+ t.flatRates=document.getElementById('flat').value.split('\\n').map(l=>l.split(';')).filter(a=>a[0]&&a[0].trim()).map(a=>({city:a[0],day:a[1],night:a[2]}));
+ if(await post('/fare/config',{tariff:t}))alert('Zapisano cennik')}
+render();
+</script></body></html>`;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -276,10 +381,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     photonUrl: process.env.PHOTON_URL || 'https://photon.komoot.io',
     addressFile: process.env.ADDRESS_FILE || '../data/addresses.tsv',
     dbFile: process.env.DB_FILE || '../data/db.json',
+    zonesFile: process.env.ZONES_FILE || '../data/zones.json',
     tunnelMetricsUrl: process.env.TUNNEL_METRICS_URL || '',
     tomtomKey: process.env.TOMTOM_API_KEY || '',
     tomtomBase: process.env.TOMTOM_BASE || 'https://api.tomtom.com',
     apiToken: process.env.API_TOKEN || '',
+    adminToken: process.env.ADMIN_TOKEN || '',
     tolerancePct: +(process.env.ROUTE_TOLERANCE_PCT || 10),
     maxExtraSec: +(process.env.ROUTE_MAX_EXTRA_SEC || 180),
   };
