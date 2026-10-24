@@ -102,6 +102,19 @@ class NavigationEngine(
             limit, laneShown, laneDist, along)
     }
 
+    /** Punkt na trasie w odległości `along` m od początku (do kierowania kamery „przed siebie”). */
+    fun pointAt(along: Double): LatLon {
+        val a = along.coerceIn(0.0, total)
+        var i = 0
+        while (i < cum.size - 2 && cum[i + 1] < a) i++
+        val seg = cum[i + 1] - cum[i]
+        val t = if (seg <= 0) 0.0 else (a - cum[i]) / seg
+        return LatLon(pts[i].lat + t * (pts[i + 1].lat - pts[i].lat), pts[i].lon + t * (pts[i + 1].lon - pts[i].lon))
+    }
+
+    /** Pozostała część trasy (do podglądu z góry). */
+    fun remainingPoints(fromIndex: Int): List<LatLon> = pts.subList(fromIndex.coerceIn(0, pts.size - 1), pts.size)
+
     /** Rzut dowolnego punktu na trasę: (dystans wzdłuż trasy w m, odległość od trasy w m). */
     fun project(p: LatLon): Pair<Double, Double> {
         val h = nearest(p, 0, pts.size - 2)
@@ -148,5 +161,41 @@ object Speech {
         m < 1000 -> "${(m / 10).roundToInt() * 10} m"
         m < 10000 -> String.format(java.util.Locale.forLanguageTag("pl-PL"), "%.1f km", m / 1000)
         else -> "${(m / 1000).roundToInt()} km"
+    }
+}
+
+/** Parametry kamery nawigacji: zoom wg prędkości i bliskości manewru, kierunek wg trasy. */
+object NavCamera {
+    /** Docelowy zoom: ok. 17,5 przy postoju, 16,4 przy 50 km/h, 15,6 przy 90, 14,9 przy 130 km/h; bliżej przed skrętem. */
+    fun zoomFor(speedKmh: Double, distToManeuverM: Double): Double {
+        val v = speedKmh.coerceIn(0.0, 140.0)
+        val stops = listOf(0.0 to 17.5, 20.0 to 17.2, 50.0 to 16.4, 90.0 to 15.6, 130.0 to 14.9, 140.0 to 14.8)
+        var z = stops.last().second
+        for (k in 0 until stops.size - 1) {
+            val (v0, z0) = stops[k]; val (v1, z1) = stops[k + 1]
+            if (v <= v1) { z = z0 + (z1 - z0) * (v - v0) / (v1 - v0); break }
+        }
+        val near = when {
+            distToManeuverM < 60 -> 0.8
+            distToManeuverM < 200 -> 0.8 * (200 - distToManeuverM) / 140
+            else -> 0.0
+        }
+        return minOf(18.0, z + near)
+    }
+
+    /** Ile metrów przed autem patrzy kamera (dalej przy większej prędkości). */
+    fun lookAheadM(speedKmh: Double) = (25.0 + speedKmh * 0.9).coerceIn(25.0, 140.0)
+
+    fun bearing(a: LatLon, b: LatLon): Double {
+        val la1 = Math.toRadians(a.lat); val la2 = Math.toRadians(b.lat); val dl = Math.toRadians(b.lon - a.lon)
+        val y = Math.sin(dl) * Math.cos(la2)
+        val x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dl)
+        return (Math.toDegrees(Math.atan2(y, x)) + 360) % 360
+    }
+
+    /** Płynne przejście kąta (najkrótszą drogą przez 0/360). */
+    fun smoothAngle(from: Double, to: Double, k: Double): Double {
+        val d = ((to - from + 540) % 360) - 180
+        return (from + d * k + 360) % 360
     }
 }

@@ -210,6 +210,12 @@
             android:id="@+id/recenterButton"
             style="@style/RoundButton"
             android:text="◎" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/overviewButton"
+            style="@style/RoundButton"
+            android:text="🗺"
+            android:visibility="gone" />
     </LinearLayout>
 
     <!-- „Nadal jest?” przy mijaniu zgłoszenia -->

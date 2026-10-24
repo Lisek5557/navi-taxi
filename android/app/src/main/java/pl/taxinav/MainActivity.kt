@@ -164,6 +164,14 @@ class MainActivity : AppCompatActivity() {
     private var refreshJob: Job? = null
     private var lastNotifAt = 0L
 
+    // Kamera nawigacji
+    private var followMode = true
+    private var overview = false
+    private var overviewJob: Job? = null
+    private var camZoom = 16.5
+    private var camBearing = -1.0
+    private lateinit var overviewButton: MaterialButton
+
     // Wyszukiwanie
     private var placeResults: List<Place> = emptyList()
     private var suggestJob: Job? = null
@@ -221,6 +229,13 @@ class MainActivity : AppCompatActivity() {
                 if (loadedStyleUrl != FALLBACK_STYLE) loadStyle(FALLBACK_STYLE)
             }
             loadStyle(desiredStyleUrl())
+            // Przesunięcie mapy palcem w trakcie nawigacji wyłącza śledzenie (◎ przywraca).
+            m.addOnCameraMoveStartedListener { reason ->
+                if (navigating && reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
+                    followMode = false
+                    overview = false
+                }
+            }
             m.addOnMapClickListener {
                 if (results.visibility == View.VISIBLE) { results.visibility = View.GONE; hideKeyboard() }
                 false
@@ -361,6 +376,8 @@ class MainActivity : AppCompatActivity() {
             muteButton.text = if (voice.muted) "🔇" else "🔊"
         }
         findViewById<MaterialButton>(R.id.recenterButton).setOnClickListener { recenter() }
+        overviewButton = findViewById(R.id.overviewButton)
+        overviewButton.setOnClickListener { if (overview) followCamera() else showOverview() }
         renderFavorites()
     }
 
@@ -587,6 +604,7 @@ class MainActivity : AppCompatActivity() {
             val st = e.update(pos, loc.speed.toDouble(), loc.accuracy.toDouble())
             lastNavState = st
             renderNavState(st)
+            updateNavCamera(loc, st, e)
             checkReportsOnRoute(e, st)
             updateSpeed(loc, st.speedLimit)
             if (st.arrived) {
@@ -1118,6 +1136,8 @@ class MainActivity : AppCompatActivity() {
         searchPanel.visibility = View.GONE
         results.visibility = View.GONE
         navBanner.visibility = View.VISIBLE
+        overviewButton.visibility = View.VISIBLE
+        camBearing = -1.0
         cancelButton.visibility = View.GONE
         gmapsButton.visibility = View.GONE
         routeOptions.visibility = View.GONE
@@ -1150,12 +1170,18 @@ class MainActivity : AppCompatActivity() {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         navBanner.visibility = View.GONE
         lanesRow.visibility = View.GONE
+        overviewButton.visibility = View.GONE
+        overviewJob?.cancel()
+        overview = false
         searchPanel.visibility = View.VISIBLE
         map?.locationComponent?.takeIf { it.isLocationComponentActivated }?.apply {
             cameraMode = CameraMode.NONE
             renderMode = RenderMode.COMPASS
         }
-        map?.animateCamera(CameraUpdateFactory.tiltTo(0.0), 500)
+        map?.let { m ->
+            m.animateCamera(CameraUpdateFactory.newCameraPosition(
+                CameraPosition.Builder(m.cameraPosition).tilt(0.0).bearing(0.0).padding(0.0, 0.0, 0.0, 0.0).build()), 600)
+        }
         if (arrived) {
             toast("Dotarłeś do celu")
             clearRoute()
@@ -1232,14 +1258,73 @@ class MainActivity : AppCompatActivity() {
         lanesRow.visibility = View.VISIBLE
     }
 
+    /** Kamera jedzie za autem: kierunek wg trasy przed nami, zoom wg prędkości, lekki kąt. */
     @SuppressLint("MissingPermission")
     private fun followCamera() {
-        val lc = map?.locationComponent ?: return
-        if (!lc.isLocationComponentActivated) return
-        lc.cameraMode = CameraMode.TRACKING_GPS
-        lc.renderMode = RenderMode.GPS
-        lc.zoomWhileTracking(17.0)
-        lc.tiltWhileTracking(50.0)
+        followMode = true
+        overview = false
+        overviewJob?.cancel()
+        overviewButton.text = "🗺"
+        map?.locationComponent?.takeIf { it.isLocationComponentActivated }?.apply {
+            cameraMode = CameraMode.NONE
+            renderMode = RenderMode.GPS
+        }
+        val loc = lastLocation ?: return
+        val st = lastNavState
+        val e = engine
+        if (st != null && e != null) updateNavCamera(loc, st, e, durationMs = 600)
+    }
+
+    private fun updateNavCamera(loc: Location, st: NavState, e: NavigationEngine, durationMs: Int = 950) {
+        val m = map ?: return
+        if (!followMode || overview) return
+        val kmh = if (loc.hasSpeed()) loc.speed * 3.6 else 0.0
+        val target = NavCamera.zoomFor(kmh, st.distanceToNextM)
+        camZoom += (target - camZoom) * 0.35
+        // Kierunek: na punkt trasy przed autem (płynnie na zakrętach); poza trasą — kurs GPS.
+        val brg = when {
+            st.offRoute && loc.hasBearing() -> loc.bearing.toDouble()
+            else -> NavCamera.bearing(st.snapped, e.pointAt(st.alongM + NavCamera.lookAheadM(kmh)))
+        }
+        camBearing = when {
+            camBearing < 0 -> brg
+            kmh < 4 -> camBearing                                   // na postoju nie kręcimy mapą
+            else -> NavCamera.smoothAngle(camBearing, brg, 0.55)
+        }
+        val pos = if (!st.offRoute && st.distanceFromRouteM < 25) LatLng(st.snapped.lat, st.snapped.lon) else LatLng(loc.latitude, loc.longitude)
+        val h = mapView.height.toDouble()
+        val bottomPad = (if (bottomPanel.visibility == View.VISIBLE) bottomPanel.height else 0) + 16 * resources.displayMetrics.density
+        // Auto w dolnej części ekranu — widać więcej drogi przed sobą.
+        val topPad = if (isInPip()) h * 0.35 else h * 0.50
+        val cam = CameraPosition.Builder()
+            .target(pos).zoom(camZoom).bearing(camBearing).tilt(if (isInPip()) 30.0 else 45.0)
+            .padding(0.0, topPad, 0.0, bottomPad.toDouble())
+            .build()
+        m.animateCamera(CameraUpdateFactory.newCameraPosition(cam), durationMs)
+    }
+
+    /** Podgląd całej pozostałej trasy z góry; po 10 s powrót do jazdy. */
+    private fun showOverview() {
+        val m = map ?: return
+        val e = engine ?: return
+        val pts = e.remainingPoints(lastNavState?.traveledIndex ?: 0)
+        if (pts.size < 2) return
+        overview = true
+        followMode = false
+        overviewButton.text = "◎"
+        val b = LatLngBounds.Builder()
+        pts.forEach { b.include(LatLng(it.lat, it.lon)) }
+        lastLocation?.let { b.include(LatLng(it.latitude, it.longitude)) }
+        val d = resources.displayMetrics.density
+        m.moveCamera(CameraUpdateFactory.newCameraPosition(
+            CameraPosition.Builder(m.cameraPosition).padding(0.0, 0.0, 0.0, 0.0).build()))
+        m.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 0.0, 0.0,
+            (60 * d).toInt(), navBanner.height + (40 * d).toInt(), (90 * d).toInt(), bottomPanel.height + (40 * d).toInt()), 900)
+        overviewJob?.cancel()
+        overviewJob = lifecycleScope.launch {
+            delay(10_000)
+            if (overview && navigating) followCamera()
+        }
     }
 
     private fun recenter() {

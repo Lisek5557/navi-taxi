@@ -124,4 +124,21 @@ class NavigationEngineTest {
         e.update(at(960.0), speedMps = 8.0)
         assertEquals("Dotarłeś do przystanku 1.", said.last())
     }
+
+    @Test fun cameraZoomBearingLookAhead() {
+        assertEquals(17.5, NavCamera.zoomFor(0.0, 1000.0), 0.01)
+        assertEquals(16.4, NavCamera.zoomFor(50.0, 1000.0), 0.01)
+        assertEquals(14.9, NavCamera.zoomFor(130.0, 1000.0), 0.01)
+        assertTrue(NavCamera.zoomFor(50.0, 50.0) > NavCamera.zoomFor(50.0, 500.0))   // przybliżenie przed skrętem
+        assertEquals(25.0, NavCamera.lookAheadM(0.0), 0.01)
+        assertEquals(140.0, NavCamera.lookAheadM(200.0), 0.01)
+        assertEquals(0.0, NavCamera.bearing(at(0.0), at(100.0)), 1.0)                 // na północ
+        assertEquals(90.0, NavCamera.bearing(at(0.0), at(0.0, 100.0)), 1.0)           // na wschód
+        assertEquals(5.0, NavCamera.smoothAngle(350.0, 20.0, 0.5), 0.01)              // przez 0°, nie przez 180°
+        val e = NavigationEngine(route, {}, announceStart = false)
+        val p = e.pointAt(1200.0)                                                      // 200 m po skręcie w prawo
+        assertEquals(1000.0, (p.lat - lat0) * 111195.0, 10.0)
+        assertTrue(p.lon > lon0)
+        assertEquals(6, e.remainingPoints(10).size)
+    }
 }
