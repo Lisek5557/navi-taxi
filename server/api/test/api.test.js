@@ -95,7 +95,7 @@ test('API: bez klucza 401, health bez klucza OK', async () => {
   await withServer({}, fn, async (base) => {
     assert.equal((await post(base, { from: { lat: 1, lon: 1 }, to: { lat: 2, lon: 2 } }, 'zly')).status, 401);
     const h = await (await fetch(`${base}/health`)).json();
-    assert.deepEqual(h, { ok: true, valhalla: true, traffic: true });
+    assert.deepEqual(h, { ok: true, valhalla: true, traffic: true, addresses: 0 });
   });
 });
 

@@ -34,7 +34,10 @@ services:
       - valhalla
     ports:
       - "8080:8080"         # sieć lokalna (Wi-Fi) — do testów bez tunelu
+    volumes:
+      - ./data:/data        # addresses.tsv — lokalna baza adresów
     environment:
+      - ADDRESS_FILE=/data/addresses.tsv
       - VALHALLA_URL=http://valhalla:8002
       - PHOTON_URL=https://photon.komoot.io
       - TOMTOM_API_KEY=${TOMTOM_API_KEY:-}

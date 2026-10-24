@@ -20,7 +20,8 @@ Android + własny serwer tras na Twoim komputerze (OpenStreetMap Polska).
 - **Najkrótsza rozsądna trasa**: serwer liczy trasę najszybszą, 2 alternatywy i najkrótszą, a potem wybiera **najkrótszą, która jest wolniejsza od najszybszej maks. o 10% i maks. o 3 min** (z uwzględnieniem korków). Próg ustawiasz w `server/.env`.
 - **Korki**: trasa kolorowana na zielono, pomarańczowo, czerwono i bordowo, warstwa korków na mapie (przycisk 🚦), co 3 minuty odświeżenie i zmiana trasy, jeśli nowa jest szybsza o ≥2 min.
 - **Przeliczanie** po zjechaniu z trasy (3 odczyty GPS dalej niż 40 m), z uwzględnieniem kierunku jazdy (bez propozycji zawracania w miejscu).
-- Wyszukiwanie adresów albo przytrzymanie palca na mapie, żeby wybrać cel.
+- **Własna baza adresów** województwa kujawsko-pomorskiego (320 tys. adresów z OSM, `server/data/addresses.tsv`): wyszukiwanie w kilka ms, bez polskich znaków, z literówkami i skrótami („jagielonska 10 byd”), najbliższe wyniki pierwsze, trasa prosto pod budynek. Miejsca z nazwą (dworce, szpitale, galerie) i reszta Polski: publiczny Photon.
+- Przytrzymanie palca na mapie, żeby wybrać cel.
 
 ## 1. Serwer (Windows)
 
@@ -46,6 +47,18 @@ Skrypty: `start.ps1` · `status.ps1` · `tunnel-url.ps1` (aktualny adres tunelu)
 3. W aplikacji: ⚙ **Ustawienia** → adres serwera i klucz API ze `start.ps1` → **Sprawdź połączenie**.
 4. Polski głos: Ustawienia telefonu → Zamiana tekstu na mowę → Google, język polski (pobierz dane głosu).
 
+## Aktualizacja bazy adresów
+
+Nowy eksport GeoJSON (Point z `addr:city`, `addr:street`, `addr:housenumber`, `addr:postcode`) wrzuć do `server\data`, potem:
+
+```
+cd server
+docker compose run --rm api node tools/import-geojson.js /data/NOWY_PLIK.geojson /data/addresses.tsv
+docker compose restart api
+```
+
+Dane adresowe: © współtwórcy OpenStreetMap, licencja ODbL.
+
 ## Testy
 
 ```
@@ -61,4 +74,4 @@ cd android && gradlew test                      # silnik nawigacji, polskie komu
 - Korki TomTom w darmowym pakiecie: ~2500 zapytań dziennie (≈150–250 tras dziennie dzięki cache). Kolejny krok:
   liczenie korków z prędkości własnych kierowców.
 - Mapa bazowa: publiczne kafle OpenFreeMap. Docelowo własny serwer kafli.
-- Wyszukiwarka adresów: publiczny Photon (komoot). Docelowo własna instancja na danych PL.
+- Miejsca z nazwą (POI) wyszukuje publiczny Photon. Następny krok: własne POI wyciągnięte z mapy OSM Polski.

@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json ./
 COPY server.js ./
 COPY lib ./lib
+COPY tools ./tools
 ENV NODE_ENV=production
 EXPOSE 8080
 USER node

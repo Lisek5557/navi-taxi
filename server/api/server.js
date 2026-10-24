@@ -2,6 +2,7 @@
 import http from 'node:http';
 import { makeRouter } from './lib/routing.js';
 import { makeTraffic } from './lib/traffic.js';
+import { loadGeocoder } from './lib/geocoder.js';
 
 export function createServer(cfg, deps = {}) {
   const fetchImpl = deps.fetchImpl || fetch;
@@ -11,6 +12,31 @@ export function createServer(cfg, deps = {}) {
     tolerancePct: cfg.tolerancePct, maxExtraSec: cfg.maxExtraSec,
   });
   const tileCache = new Map(); // "z/x/y" -> {t, buf}
+  const geocoder = deps.geocoder !== undefined ? deps.geocoder : loadGeocoder(cfg.addressFile);
+  if (geocoder) console.log(`Lokalna baza adresów: ${geocoder.size} adresów`);
+
+  async function photonSearch(q, near, timeoutMs) {
+    const p = new URLSearchParams({ q, limit: '8' });
+    if (near) { p.set('lat', near.lat); p.set('lon', near.lon); }
+    p.set('bbox', '14.0,49.0,24.2,55.0'); // Polska
+    const r = await fetchImpl(`${cfg.photonUrl}/api/?${p}`, {
+      headers: { 'user-agent': 'TaxiNav/0.1' }, signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!r.ok) throw new Error('photon ' + r.status);
+    const j = await r.json();
+    return (j.features || []).map((f) => {
+      const pr = f.properties || {};
+      const line1 = [pr.name, pr.street && pr.housenumber ? `${pr.street} ${pr.housenumber}` : pr.street]
+        .filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', ');
+      return {
+        label: line1 || pr.city || q,
+        detail: [pr.postcode, pr.city || pr.town || pr.village, pr.district].filter(Boolean).join(' '),
+        lat: f.geometry.coordinates[1],
+        lon: f.geometry.coordinates[0],
+        source: 'photon',
+      };
+    });
+  }
 
   const send = (res, code, obj) => {
     const body = JSON.stringify(obj);
@@ -37,7 +63,7 @@ export function createServer(cfg, deps = {}) {
           const r = await fetchImpl(`${cfg.valhallaUrl}/status`, { signal: AbortSignal.timeout(2000) });
           valhalla = r.ok;
         } catch {}
-        return send(res, 200, { ok: true, valhalla, traffic: !!cfg.tomtomKey });
+        return send(res, 200, { ok: true, valhalla, traffic: !!cfg.tomtomKey, addresses: geocoder ? geocoder.size : 0 });
       }
 
       // Autoryzacja: serwer jest wystawiony do internetu przez tunel.
@@ -54,26 +80,23 @@ export function createServer(cfg, deps = {}) {
       if (req.method === 'GET' && url.pathname === '/geocode') {
         const q = (url.searchParams.get('q') || '').trim();
         if (q.length < 2) return send(res, 400, { error: 'Za krótkie zapytanie' });
-        const p = new URLSearchParams({ q, limit: '8' });
-        const lat = url.searchParams.get('lat'), lon = url.searchParams.get('lon');
-        if (lat && lon) { p.set('lat', lat); p.set('lon', lon); }
-        p.set('bbox', '14.0,49.0,24.2,55.0'); // Polska
-        const r = await fetchImpl(`${cfg.photonUrl}/api/?${p}`, {
-          headers: { 'user-agent': 'TaxiNav/0.1' }, signal: AbortSignal.timeout(6000),
-        });
-        if (!r.ok) return send(res, 502, { error: 'Wyszukiwarka adresów niedostępna' });
-        const j = await r.json();
-        const results = (j.features || []).map((f) => {
-          const pr = f.properties || {};
-          const line1 = [pr.name, pr.street && pr.housenumber ? `${pr.street} ${pr.housenumber}` : pr.street]
-            .filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', ');
-          return {
-            label: line1 || pr.city || q,
-            detail: [pr.postcode, pr.city || pr.town || pr.village, pr.district].filter(Boolean).join(' '),
-            lat: f.geometry.coordinates[1],
-            lon: f.geometry.coordinates[0],
-          };
-        });
+        const lat = parseFloat(url.searchParams.get('lat')), lon = parseFloat(url.searchParams.get('lon'));
+        const near = Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+        const LIMIT = 8;
+
+        // 1) Lokalna baza adresów (natychmiast), 2) Photon równolegle — miejsca z nazwą i reszta Polski.
+        const local = geocoder ? geocoder.search(q, { near, limit: LIMIT }) : [];
+        let photon = [], photonOk = true;
+        if (local.length < LIMIT) {
+          try { photon = await photonSearch(q, near, local.length ? 2500 : 6000); } catch { photonOk = false; }
+        }
+        const far = (a, b) => Math.abs(a.lat - b.lat) > 0.0004 || Math.abs(a.lon - b.lon) > 0.0006;
+        const results = [...local];
+        for (const r of photon) {
+          if (results.length >= LIMIT) break;
+          if (results.every((x) => far(x, r))) results.push(r);
+        }
+        if (!results.length && !photonOk) return send(res, 502, { error: 'Wyszukiwarka adresów niedostępna' });
         return send(res, 200, { results });
       }
 
@@ -108,6 +131,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     port: +(process.env.PORT || 8080),
     valhallaUrl: process.env.VALHALLA_URL || 'http://localhost:8002',
     photonUrl: process.env.PHOTON_URL || 'https://photon.komoot.io',
+    addressFile: process.env.ADDRESS_FILE || '../data/addresses.tsv',
     tomtomKey: process.env.TOMTOM_API_KEY || '',
     tomtomBase: process.env.TOMTOM_BASE || 'https://api.tomtom.com',
     apiToken: process.env.API_TOKEN || '',
