@@ -1,0 +1,53 @@
+# TaxiNav — serwer na Twoim komputerze (Docker Desktop).
+#   valhalla : silnik tras na danych OpenStreetMap Polski (profil "taxi" = buspasy)
+#   api      : backend dla aplikacji (wybór trasy, korki TomTom, wyszukiwanie adresów)
+#   tunnel   : Cloudflare Tunnel — dostęp z telefonów przez internet
+services:
+  valhalla:
+    image: ghcr.io/valhalla/valhalla-scripted:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8002:8002"   # tylko lokalnie, do debugowania
+    volumes:
+      - ./valhalla_data:/custom_files
+    environment:
+      - tile_urls=https://download.geofabrik.de/europe/poland-latest.osm.pbf
+      - use_tiles_ignore_pbf=True
+      - build_admins=True
+      - build_time_zones=True
+      - build_elevation=False
+      - build_transit=False
+      - force_rebuild=False
+      - update_existing_config=True
+      - server_threads=4
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8002/status || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 240          # pierwsze budowanie kafli Polski trwa ok. 30–90 min
+      start_period: 120s
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    depends_on:
+      - valhalla
+    ports:
+      - "8080:8080"         # sieć lokalna (Wi-Fi) — do testów bez tunelu
+    environment:
+      - VALHALLA_URL=http://valhalla:8002
+      - PHOTON_URL=https://photon.komoot.io
+      - TOMTOM_API_KEY=${TOMTOM_API_KEY:-}
+      - API_TOKEN=${API_TOKEN:?Ustaw API_TOKEN w pliku .env}
+      - ROUTE_TOLERANCE_PCT=${ROUTE_TOLERANCE_PCT:-10}
+      - ROUTE_MAX_EXTRA_SEC=${ROUTE_MAX_EXTRA_SEC:-180}
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - api
+    # Bez konta Cloudflare: "quick tunnel" z losowym adresem *.trycloudflare.com
+    # (zmienia się po restarcie). Ze stałym adresem: ustaw CLOUDFLARE_TUNNEL_TOKEN
+    # i zamień command na: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate --url http://api:8080

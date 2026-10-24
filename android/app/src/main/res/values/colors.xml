@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#FF15171C</color>
+    <color name="panel">#F21F232B</color>
+    <color name="text">#FFF3F4F6</color>
+    <color name="text_secondary">#FFA3A9B5</color>
+    <color name="accent">#FFFFC629</color>
+    <color name="banner">#FF1B6B3A</color>
+    <color name="traffic_free">#FF2E9E5B</color>
+    <color name="traffic_slow">#FFF5A623</color>
+    <color name="traffic_jam">#FFE5482F</color>
+    <color name="traffic_stop">#FF8E1B1B</color>
+    <color name="route_unknown">#FF3478F6</color>
+</resources>

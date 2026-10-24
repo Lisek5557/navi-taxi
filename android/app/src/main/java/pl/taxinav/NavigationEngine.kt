@@ -1,0 +1,133 @@
+package pl.taxinav
+
+import kotlin.math.max
+import kotlin.math.roundToInt
+
+data class NavState(
+    val distanceFromRouteM: Double,
+    val offRoute: Boolean,
+    val arrived: Boolean,
+    val nextManeuver: Maneuver?,
+    val distanceToNextM: Double,
+    val remainingM: Double,
+    val remainingS: Double,
+    val snapped: LatLon,
+    val traveledIndex: Int,
+)
+
+/**
+ * Silnik nawigacji zakręt po zakręcie (bez zależności od Androida — testowalny).
+ * Valhalla: manewr k opisuje akcję w punkcie `begin` i jazdę do początku manewru k+1.
+ */
+class NavigationEngine(
+    val route: Route,
+    private val speak: (String) -> Unit,
+    announceStart: Boolean = true,
+) {
+    private val pts = route.points
+    private val cum = Geo.cumulative(pts)
+    private val total = max(1.0, cum.last())
+    private val manStart = route.maneuvers.map { cum[it.begin.coerceIn(0, pts.size - 1)] }
+    private var lastSeg = 0
+    private var offCount = 0
+    private val saidFar = HashSet<Int>()
+    private val saidNear = HashSet<Int>()
+    private var saidArrived = false
+    private var startPending = announceStart
+
+    fun update(pos: LatLon, speedMps: Double = 0.0, accuracyM: Double = 10.0): NavState {
+        // 1. Najbliższy odcinek — najpierw w oknie wokół poprzedniej pozycji, potem globalnie.
+        var best = nearest(pos, max(0, lastSeg - 5), minOf(pts.size - 2, lastSeg + 80))
+        if (best.dist > 60) {
+            val global = nearest(pos, 0, pts.size - 2)
+            if (global.dist < best.dist) best = global
+        }
+        lastSeg = best.seg
+        val along = cum[best.seg] + best.t * (cum[best.seg + 1] - cum[best.seg])
+
+        // 2. Zjechanie z trasy: 3 kolejne odczyty dalej niż próg.
+        val threshold = max(40.0, accuracyM * 1.5)
+        offCount = if (best.dist > threshold) offCount + 1 else 0
+        val offRoute = offCount >= 3
+
+        // 3. Aktualny i następny manewr.
+        var cur = 0
+        for (k in manStart.indices) if (manStart[k] <= along + 5) cur = k
+        val nextIdx = cur + 1
+        val next = route.maneuvers.getOrNull(nextIdx)
+        val distToNext = if (next != null) max(0.0, manStart[nextIdx] - along) else 0.0
+        val remaining = max(0.0, total - along)
+        val remainingS = route.trafficTimeS * remaining / total
+        val arrived = remaining < 30 || (next == null && remaining < 60)
+
+        // 4. Komunikaty głosowe.
+        if (startPending) {
+            startPending = false
+            route.maneuvers.firstOrNull()?.let { speak(it.verbalPre) }
+        }
+        if (arrived) {
+            if (!saidArrived) {
+                saidArrived = true
+                speak(route.maneuvers.lastOrNull()?.verbalPre ?: "Dotarłeś do celu.")
+            }
+        } else if (next != null && !offRoute) {
+            val farDist = if (speedMps > 22) 1500.0 else if (speedMps > 14) 800.0 else 400.0
+            val nearDist = max(60.0, speedMps * 7)
+            val isDestination = next.type in 4..6
+            if (distToNext <= nearDist && nextIdx !in saidNear) {
+                saidNear += nextIdx; saidFar += nextIdx
+                if (!isDestination) speak(next.verbalPre)
+            } else if (distToNext <= farDist && distToNext > nearDist + 100 && nextIdx !in saidFar) {
+                saidFar += nextIdx
+                speak("${Speech.inDistance(distToNext)}, ${Speech.lowerFirst(next.verbalAlert ?: next.verbalPre)}")
+            }
+        }
+
+        val snapped = LatLon(
+            pts[best.seg].lat + best.t * (pts[best.seg + 1].lat - pts[best.seg].lat),
+            pts[best.seg].lon + best.t * (pts[best.seg + 1].lon - pts[best.seg].lon),
+        )
+        return NavState(best.dist, offRoute, arrived, next, distToNext, remaining, remainingS, snapped, best.seg)
+    }
+
+    private data class Hit(val seg: Int, val dist: Double, val t: Double)
+
+    private fun nearest(p: LatLon, from: Int, to: Int): Hit {
+        if (pts.size < 2) return Hit(0, if (pts.isEmpty()) 0.0 else Geo.distance(p, pts[0]), 0.0)
+        var best = Hit(from, Double.MAX_VALUE, 0.0)
+        for (i in from..to) {
+            val (d, t) = Geo.projectOnSegment(p, pts[i], pts[i + 1])
+            if (d < best.dist) best = Hit(i, d, t)
+        }
+        return best
+    }
+}
+
+object Speech {
+    /** "Za 300 metrów", "Za 1 kilometr", "Za półtora kilometra", "Za 2 kilometry", "Za 5 kilometrów". */
+    fun inDistance(m: Double): String {
+        if (m < 1000) {
+            val step = if (m > 300) 100 else 50
+            val r = max(step, ((m / step).roundToInt() * step))
+            return if (r >= 1000) "Za 1 kilometr" else "Za $r metrów"
+        }
+        val halfKm = (m / 500).roundToInt() / 2.0
+        if (halfKm == 1.5) return "Za półtora kilometra"
+        if (halfKm % 1.0 != 0.0) return "Za ${halfKm.toString().replace('.', ',')} kilometra"
+        val n = halfKm.toInt()
+        return "Za $n " + when {
+            n == 1 -> "kilometr"
+            n % 10 in 2..4 && n % 100 !in 12..14 -> "kilometry"
+            else -> "kilometrów"
+        }
+    }
+
+    fun lowerFirst(s: String) = if (s.isEmpty()) s else s[0].lowercaseChar() + s.substring(1)
+
+    /** Na ekran: "350 m", "1,2 km". */
+    fun short(m: Double): String = when {
+        m < 1000 -> "${(m / 10).roundToInt() * 10} m"
+        m < 10000 -> String.format(java.util.Locale.forLanguageTag("pl-PL"), "%.1f km", m / 1000)
+        else -> "${(m / 1000).roundToInt()} km"
+    }
+}

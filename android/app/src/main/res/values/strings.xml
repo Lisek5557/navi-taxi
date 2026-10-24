@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TaxiNav</string>
+    <string name="search_hint">Dokąd jedziemy?</string>
+    <string name="settings">Ustawienia</string>
+    <string name="start">START</string>
+    <string name="stop">STOP</string>
+    <string name="cancel">Anuluj</string>
+    <string name="server_url">Adres serwera</string>
+    <string name="api_key">Klucz API</string>
+    <string name="settings_hint">Oba pola pokazuje skrypt start.ps1 na komputerze z serwerem. Adres tunelu trycloudflare.com zmienia się po restarcie serwera.</string>
+    <string name="test_connection">Sprawdź połączenie</string>
+    <string name="save">Zapisz</string>
+    <string name="need_location">Nawigacja potrzebuje dostępu do lokalizacji.</string>
+    <string name="long_press_hint">Przytrzymaj palec na mapie, aby wybrać cel.</string>
+</resources>
