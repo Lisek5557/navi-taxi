@@ -24,7 +24,30 @@ data class Route(
     val kinds: List<String>,
 )
 
-data class RouteResponse(val chosen: Route, val alternatives: List<Route>)
+data class RouteResponse(
+    val chosen: Route,
+    val alternatives: List<Route>,
+    val routes: List<Route> = listOf(chosen) + alternatives,
+    /** Indeksy w [routes] dla trybów: "fastest", "shortest", "optimal". */
+    val pick: Map<String, Int> = emptyMap(),
+) {
+    fun routeFor(mode: String): Route = routes.getOrNull(pick[mode] ?: -1) ?: chosen
+
+    /** Ta sama odpowiedź, ale z trasą wybranego trybu jako główną. */
+    fun withMode(mode: String): RouteResponse {
+        val c = routeFor(mode)
+        return copy(chosen = c, alternatives = routes.filter { it !== c })
+    }
+}
+
+object RouteModes {
+    val ALL = listOf("optimal", "fastest", "shortest")
+    fun label(mode: String) = when (mode) {
+        "fastest" -> "Najszybsza"
+        "shortest" -> "Najkrótsza"
+        else -> "Optymalna"
+    }
+}
 
 data class Place(val label: String, val detail: String, val lat: Double, val lon: Double) {
     override fun toString() = if (detail.isBlank()) label else "$label\n$detail"

@@ -131,10 +131,12 @@ ${card('W tej samej sieci Wi-Fi', lan, 'Działa tylko w zasięgu domowego Wi-Fi.
         const LIMIT = 8;
 
         // 1) Lokalna baza adresów (natychmiast), 2) Photon równolegle — miejsca z nazwą i reszta Polski.
+        // fast=1: podpowiedzi podczas pisania — Photon tylko gdy lokalnie mało wyników i z krótkim limitem czasu.
+        const fast = url.searchParams.get('fast') === '1';
         const local = geocoder ? geocoder.search(q, { near, limit: LIMIT }) : [];
         let photon = [], photonOk = true;
-        if (local.length < LIMIT) {
-          try { photon = await photonSearch(q, near, local.length ? 2500 : 6000); } catch { photonOk = false; }
+        if (local.length < (fast ? 4 : LIMIT)) {
+          try { photon = await photonSearch(q, near, fast ? 1500 : local.length ? 2500 : 6000); } catch { photonOk = false; }
         }
         const far = (a, b) => Math.abs(a.lat - b.lat) > 0.0004 || Math.abs(a.lon - b.lon) > 0.0006;
         const results = [...local];

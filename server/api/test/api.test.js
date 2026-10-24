@@ -114,6 +114,11 @@ test('API: korek na najkrótszej -> wybiera inną, ale nie obwodnicę', async ()
     assert.equal(r.status, 200);
     const j = await r.json();
     assert.deepEqual(j.chosen.kinds, ['fastest']);         // trasa B
+    // trzy warianty: najszybsza = B, najkrótsza = A (w korku), optymalna = B
+    assert.equal(j.routes.length, 3);
+    assert.equal(j.routes[j.pick.fastest].distance, 9600);
+    assert.equal(j.routes[j.pick.shortest].distance, 9000);
+    assert.equal(j.routes[j.pick.optimal].distance, 9600);
     assert.equal(j.chosen.distance, 9600);
     assert.ok(j.chosen.hasTraffic);
     assert.equal(j.alternatives.length, 2);
@@ -139,6 +144,9 @@ test('API: bez korków (brak klucza TomTom) wybiera najkrótszą w tolerancji', 
     const j = await (await post(base, { from: { lat: 52.2289, lon: 21.0034 }, to: { lat: 52.17, lon: 20.973 } })).json();
     // A: 9.0 km / 16 min, B: 9.6 km / 15 min -> 960 <= 990 -> A (najkrótsza)
     assert.deepEqual(j.chosen.kinds, ['shortest']);
+    assert.equal(j.routes[j.pick.shortest].distance, 9000);
+    assert.equal(j.routes[j.pick.fastest].distance, 9600);
+    assert.equal(j.routes[j.pick.optimal].distance, 9000);
     assert.equal(calls.tomtom, 0);
     assert.equal(j.chosen.traffic.length, 0);
   });

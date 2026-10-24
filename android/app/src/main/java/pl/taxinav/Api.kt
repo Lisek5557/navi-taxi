@@ -18,6 +18,27 @@ object Prefs {
     fun trafficLayer(ctx: Context) = ctx.getSharedPreferences(FILE, 0).getBoolean("trafficLayer", true)
     fun save(ctx: Context, server: String, key: String) =
         ctx.getSharedPreferences(FILE, 0).edit().putString("server", server.trim().trimEnd('/')).putString("key", key.trim()).apply()
+    fun routeMode(ctx: Context) = ctx.getSharedPreferences(FILE, 0).getString("routeMode", "optimal")!!
+    fun setRouteMode(ctx: Context, m: String) = ctx.getSharedPreferences(FILE, 0).edit().putString("routeMode", m).apply()
+
+    /** Ostatnie cele (najnowsze pierwsze, maks. 10). */
+    fun recent(ctx: Context): List<Place> = runCatching {
+        val arr = JSONArray(ctx.getSharedPreferences(FILE, 0).getString("recent", "[]"))
+        (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            Place(o.getString("label"), o.optString("detail"), o.getDouble("lat"), o.getDouble("lon"))
+        }
+    }.getOrDefault(emptyList())
+
+    fun addRecent(ctx: Context, p: Place) {
+        val list = listOf(p) + recent(ctx).filter { it.label != p.label || it.detail != p.detail }
+        val arr = JSONArray()
+        list.take(10).forEach {
+            arr.put(JSONObject().put("label", it.label).put("detail", it.detail).put("lat", it.lat).put("lon", it.lon))
+        }
+        ctx.getSharedPreferences(FILE, 0).edit().putString("recent", arr.toString()).apply()
+    }
+
     fun mapTheme(ctx: Context) = ctx.getSharedPreferences(FILE, 0).getString("mapTheme", "auto")!!
     fun setMapTheme(ctx: Context, t: String) = ctx.getSharedPreferences(FILE, 0).edit().putString("mapTheme", t).apply()
     fun setTrafficLayer(ctx: Context, on: Boolean) =
@@ -35,11 +56,20 @@ class Api(private val server: String, private val key: String) {
         if (heading != null) body.put("heading", heading.toDouble())
         val j = JSONObject(request("POST", "/route", body.toString()))
         val alts = j.optJSONArray("alternatives") ?: JSONArray()
-        RouteResponse(parseRoute(j.getJSONObject("chosen")), (0 until alts.length()).map { parseRoute(alts.getJSONObject(it)) })
+        val chosen = parseRoute(j.getJSONObject("chosen"))
+        val alternatives = (0 until alts.length()).map { parseRoute(alts.getJSONObject(it)) }
+        val arr = j.optJSONArray("routes")
+        val pickObj = j.optJSONObject("pick")
+        if (arr != null && pickObj != null && arr.length() > 0) {
+            val routes = (0 until arr.length()).map { parseRoute(arr.getJSONObject(it)) }
+            val pick = RouteModes.ALL.associateWith { pickObj.optInt(it, 0).coerceIn(0, routes.size - 1) }
+            val c = routes[pick.getValue("optimal")]
+            RouteResponse(c, routes.filter { it !== c }, routes, pick)
+        } else RouteResponse(chosen, alternatives)
     }
 
-    suspend fun geocode(q: String, near: LatLon?): List<Place> = withContext(Dispatchers.IO) {
-        var path = "/geocode?q=" + URLEncoder.encode(q, "UTF-8")
+    suspend fun geocode(q: String, near: LatLon?, fast: Boolean = false): List<Place> = withContext(Dispatchers.IO) {
+        var path = "/geocode?q=" + URLEncoder.encode(q, "UTF-8") + (if (fast) "&fast=1" else "")
         if (near != null) path += "&lat=${near.lat}&lon=${near.lon}"
         val arr = JSONObject(request("GET", path, null)).getJSONArray("results")
         (0 until arr.length()).map {

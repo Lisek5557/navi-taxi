@@ -111,6 +111,12 @@ class MainActivity : AppCompatActivity() {
     private var lastRerouteAt = 0L
     private var refreshJob: Job? = null
     private var placeResults: List<Place> = emptyList()
+    private var routeMode = "optimal"
+    private var suggestJob: Job? = null
+    private var suppressWatcher = false
+    private lateinit var gmapsButton: MaterialButton
+    private lateinit var routeOptions: LinearLayout
+    private val optViews = HashMap<String, TextView>()
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         if (granted[Manifest.permission.ACCESS_FINE_LOCATION] == true || granted[Manifest.permission.ACCESS_COARSE_LOCATION] == true) {
@@ -144,6 +150,10 @@ class MainActivity : AppCompatActivity() {
                 if (loadedStyleUrl != FALLBACK_STYLE) loadStyle(FALLBACK_STYLE)
             }
             loadStyle(desiredStyleUrl())
+            m.addOnMapClickListener {
+                if (results.visibility == View.VISIBLE) { results.visibility = View.GONE; hideKeyboard() }
+                false
+            }
             m.addOnMapLongClickListener { p ->
                 if (!navigating) previewTo(LatLon(p.latitude, p.longitude))
                 true
@@ -192,6 +202,33 @@ class MainActivity : AppCompatActivity() {
             reloadStyleIfNeeded()
         }
         progress = findViewById(R.id.progress)
+        gmapsButton = findViewById(R.id.gmapsButton)
+        routeOptions = findViewById(R.id.routeOptions)
+        optViews["optimal"] = findViewById(R.id.optOptimal)
+        optViews["fastest"] = findViewById(R.id.optFastest)
+        optViews["shortest"] = findViewById(R.id.optShortest)
+        routeMode = Prefs.routeMode(this)
+        for ((mode, v) in optViews) v.setOnClickListener { selectRouteMode(mode) }
+        gmapsButton.setOnClickListener { openInGoogleMaps() }
+
+        // Podpowiedzi podczas pisania (z opóźnieniem 300 ms) i ostatnie wyszukiwania przy pustym polu.
+        searchInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: android.text.Editable?) {
+                if (suppressWatcher || !searchInput.hasFocus()) return
+                val q = e?.toString()?.trim().orEmpty()
+                suggestJob?.cancel()
+                if (q.length < 3) { showRecent(); return }
+                suggestJob = lifecycleScope.launch {
+                    delay(300)
+                    suggest(q)
+                }
+            }
+        })
+        searchInput.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus && searchInput.text.isNullOrBlank()) showRecent()
+        }
 
         findViewById<ImageButton>(R.id.settingsButton).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -200,10 +237,14 @@ class MainActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) { search(searchInput.text.toString()); true } else false
         }
         results.setOnItemClickListener { _, _, pos, _ ->
-            val p = placeResults[pos]
+            val p = placeResults.getOrNull(pos) ?: return@setOnItemClickListener
+            suggestJob?.cancel()
             results.visibility = View.GONE
             hideKeyboard()
+            suppressWatcher = true
             searchInput.setText(p.label)
+            suppressWatcher = false
+            Prefs.addRecent(this, p)
             previewTo(LatLon(p.lat, p.lon))
         }
         startButton.setOnClickListener { if (navigating) stopNavigation() else startNavigation() }
@@ -377,20 +418,62 @@ class MainActivity : AppCompatActivity() {
             progress.visibility = View.VISIBLE
             try {
                 val near = lastLocation?.let { LatLon(it.latitude, it.longitude) }
-                placeResults = Api.from(this@MainActivity).geocode(q, near)
-                if (placeResults.isEmpty()) toast("Nie znaleziono: $q")
-                results.adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, placeResults)
-                results.layoutParams = results.layoutParams.apply {
-                    height = if (placeResults.size > 5) (resources.displayMetrics.density * 320).toInt()
-                    else LinearLayout.LayoutParams.WRAP_CONTENT
-                }
-                results.visibility = if (placeResults.isEmpty()) View.GONE else View.VISIBLE
+                val found = Api.from(this@MainActivity).geocode(q, near)
+                if (found.isEmpty()) toast("Nie znaleziono: $q")
+                showResults(found, recent = false)
             } catch (e: ApiException) {
                 toast(e.message ?: "Błąd")
             } finally {
                 progress.visibility = View.GONE
             }
         }
+    }
+
+    private fun suggest(q: String) {
+        lifecycleScope.launch {
+            try {
+                val near = lastLocation?.let { LatLon(it.latitude, it.longitude) }
+                val found = Api.from(this@MainActivity).geocode(q, near, fast = true)
+                // Pole mogło się zmienić w trakcie zapytania.
+                if (searchInput.text.toString().trim() == q && searchInput.hasFocus()) showResults(found, recent = false)
+            } catch (_: ApiException) { /* podpowiedzi są opcjonalne */ }
+        }
+    }
+
+    private fun showRecent() {
+        val r = Prefs.recent(this)
+        if (r.isEmpty() || navigating) { results.visibility = View.GONE; return }
+        showResults(r, recent = true)
+    }
+
+    private fun showResults(list: List<Place>, recent: Boolean) {
+        placeResults = list
+        val rows = list.map { (if (recent) "🕘  " else "") + it.toString() }
+        results.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, rows)
+        results.layoutParams = results.layoutParams.apply {
+            height = if (list.size > 5) (resources.displayMetrics.density * 320).toInt()
+            else LinearLayout.LayoutParams.WRAP_CONTENT
+        }
+        results.visibility = if (list.isEmpty()) View.GONE else View.VISIBLE
+    }
+
+    private fun openInGoogleMaps() {
+        val d = destination ?: return
+        val uri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lon}&travelmode=driving")
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
+        } catch (_: Exception) {
+            toast("Nie można otworzyć Google Maps")
+        }
+    }
+
+    private fun selectRouteMode(mode: String) {
+        routeMode = mode
+        Prefs.setRouteMode(this, mode)
+        val resp = routeResp?.withMode(mode) ?: return
+        routeResp = resp
+        drawRoute(resp)
+        showPreview(resp)
     }
 
     private fun previewTo(dest: LatLon) {
@@ -400,6 +483,7 @@ class MainActivity : AppCompatActivity() {
             progress.visibility = View.VISIBLE
             try {
                 val resp = Api.from(this@MainActivity).route(LatLon(loc.latitude, loc.longitude), dest, loc.bearingOrNull())
+                    .withMode(routeMode)
                 routeResp = resp
                 drawRoute(resp)
                 fitRoute(resp.chosen)
@@ -416,20 +500,25 @@ class MainActivity : AppCompatActivity() {
         val r = resp.chosen
         bottomPanel.visibility = View.VISIBLE
         cancelButton.visibility = View.VISIBLE
+        gmapsButton.visibility = View.VISIBLE
+        routeOptions.visibility = View.VISIBLE
         startButton.text = getString(R.string.start)
+        for (mode in RouteModes.ALL) {
+            val v = optViews[mode] ?: continue
+            val m = resp.routeFor(mode)
+            v.text = "${RouteModes.label(mode)}\n${minutes(m.trafficTimeS)} · ${Speech.short(m.distanceM.toDouble())}"
+            v.isSelected = mode == routeMode
+        }
         summary.text = "${minutes(r.trafficTimeS)} · ${Speech.short(r.distanceM.toDouble())}"
         val delay = r.trafficTimeS - r.baseTimeS
-        val why = when {
-            "shortest" in r.kinds && "fastest" in r.kinds -> "najkrótsza i najszybsza"
-            "shortest" in r.kinds -> "najkrótsza rozsądna"
-            "fastest" in r.kinds -> "najszybsza"
-            else -> "alternatywna"
-        }
         summaryDetail.text = buildString {
-            append("Trasa: $why")
+            append(when (routeMode) {
+                "fastest" -> "Najszybsza (z korkami)"
+                "shortest" -> "Najkrótsza (najmniej km)"
+                else -> "Optymalna: krótka, bez straty czasu"
+            })
             if (r.hasTraffic) append(if (delay >= 60) " · korki +${delay / 60} min" else " · bez korków")
             else append(" · brak danych o korkach")
-            if (resp.alternatives.isNotEmpty()) append(" · ${resp.alternatives.size} inne (szare)")
         }
     }
 
@@ -437,7 +526,9 @@ class MainActivity : AppCompatActivity() {
         routeResp = null; destination = null; engine = null
         drawRoute(null)
         bottomPanel.visibility = View.GONE
+        suppressWatcher = true
         searchInput.setText("")
+        suppressWatcher = false
     }
 
     @SuppressLint("MissingPermission")
@@ -450,6 +541,8 @@ class MainActivity : AppCompatActivity() {
         results.visibility = View.GONE
         navBanner.visibility = View.VISIBLE
         cancelButton.visibility = View.GONE
+        gmapsButton.visibility = View.GONE
+        routeOptions.visibility = View.GONE
         startButton.text = getString(R.string.stop)
         drawRoute(resp)
         followCamera()
@@ -496,6 +589,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val resp = Api.from(this@MainActivity).route(LatLon(loc.latitude, loc.longitude), dest, loc.bearingOrNull())
+                    .withMode(routeMode)
                 if (!navigating) return@launch
                 val currentRemainingS = lastNavState?.remainingS ?: Double.MAX_VALUE
                 val saves = currentRemainingS - resp.chosen.trafficTimeS

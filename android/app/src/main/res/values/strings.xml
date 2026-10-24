@@ -15,4 +15,5 @@
     <string name="save">Zapisz</string>
     <string name="need_location">Nawigacja potrzebuje dostępu do lokalizacji.</string>
     <string name="long_press_hint">Przytrzymaj palec na mapie, aby wybrać cel.</string>
+    <string name="open_gmaps">Google Maps</string>
 </resources>

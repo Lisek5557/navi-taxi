@@ -116,9 +116,18 @@ export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, toleranceP
       traffic: c.traffic,
       maneuvers: c.maneuvers,
     });
+    // Trzy warianty do wyboru w aplikacji (indeksy w `routes`; mogą wskazywać tę samą trasę).
+    const argmin = (key, tie) => cands.reduce((best, c, i) =>
+      (c[key] < cands[best][key] || (c[key] === cands[best][key] && c[tie] < cands[best][tie]) ? i : best), 0);
     return {
       chosen: strip(chosen),
       alternatives: cands.filter((c) => c !== chosen).map(strip),
+      routes: cands.map(strip),
+      pick: {
+        fastest: argmin('trafficTime', 'distance'),
+        shortest: argmin('distance', 'trafficTime'),
+        optimal: cands.indexOf(chosen),
+      },
       rule: { tolerancePct, maxExtraSec },
     };
   }
