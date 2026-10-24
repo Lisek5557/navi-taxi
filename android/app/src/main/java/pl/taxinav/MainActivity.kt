@@ -140,7 +140,7 @@ class MainActivity : AppCompatActivity() {
             m.uiSettings.isAttributionEnabled = true
             m.cameraPosition = CameraPosition.Builder().target(LatLng(52.2297, 21.0122)).zoom(11.0).build()
             // Styl TaxiNav z serwera; gdy się nie wczyta — styl zapasowy.
-            m.addOnDidFailLoadingMapListener { _ ->
+            mapView.addOnDidFailLoadingMapListener {
                 if (loadedStyleUrl != FALLBACK_STYLE) loadStyle(FALLBACK_STYLE)
             }
             loadStyle(desiredStyleUrl())
