@@ -34,7 +34,7 @@ Android + własny serwer tras na Twoim komputerze (OpenStreetMap Polska).
 4. **Pierwszy start trwa 30–90 min**: Valhalla pobiera mapę Polski (~1,9 GB) i buduje kafle (~10 GB na dysku).
    Postęp: `docker compose logs -f valhalla`. Stan: `status.ps1`.
 
-Skróty (dwuklik): `start.bat` · `qr.bat` (kod QR dla telefonów) · `status.bat` · `tunnel-url.bat` · `stop.bat`.
+Skróty (dwuklik): `start.bat` · `qr.bat` (kod QR dla telefonów) · `status.bat` · `postep.bat` (budowanie mapy) · `tunnel-url.bat` · `stop.bat`.
 
 > Adres `*.trycloudflare.com` **zmienia się po każdym restarcie**. Stały adres: darmowe konto Cloudflare +
 > własna domena → Zero Trust → Tunnels → token → zmiana `command` w `docker-compose.yml` (opis w pliku).
