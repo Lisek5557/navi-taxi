@@ -28,7 +28,7 @@ Android + własny serwer tras na Twoim komputerze (OpenStreetMap Polska).
 1. Zainstaluj **Docker Desktop** (`winget install -e --id Docker.DockerDesktop`) i uruchom go.
    Settings → Resources: daj Dockerowi **min. 6 GB RAM**.
 2. (Opcjonalnie, dla korków) załóż darmowe konto na <https://developer.tomtom.com>, skopiuj klucz.
-3. W folderze `server` kliknij prawym na **start.ps1 → Run with PowerShell**.
+3. W folderze `server` kliknij dwukrotnie **start.bat**.
    Skrypt utworzy `.env` z kluczem API, uruchomi kontenery i wypisze **adres serwera** i **klucz API**.
    Klucz TomTom wpisz do `server\.env` (`TOMTOM_API_KEY=...`) i uruchom `start.ps1` ponownie.
 4. **Pierwszy start trwa 30–90 min**: Valhalla pobiera mapę Polski (~1,9 GB) i buduje kafle (~10 GB na dysku).
