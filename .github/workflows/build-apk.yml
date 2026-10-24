@@ -6,6 +6,9 @@ on:
     paths: ["android/**", ".github/workflows/build-apk.yml"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,8 +16,8 @@ jobs:
       run:
         working-directory: android
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -28,3 +31,13 @@ jobs:
           name: TaxiNav-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
+      - name: Publikacja APK (stały link do najnowszej wersji)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk TaxiNav.apk
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" TaxiNav.apk --repo "${{ github.repository }}" \
+            --title "TaxiNav ${{ github.run_number }}" \
+            --notes "APK z commita ${{ github.sha }}. Instalacja: otwórz plik na telefonie i zezwól na instalację z nieznanych źródeł." \
+            --latest
