@@ -20,8 +20,8 @@ targets:
       path: TaxiNav/Info.plist
       properties:
         CFBundleDisplayName: TaxiNav
-        CFBundleShortVersionString: "0.8.0"
-        CFBundleVersion: "8"
+        CFBundleShortVersionString: "0.9.0"
+        CFBundleVersion: "9"
         LSRequiresIPhoneOS: true
         UILaunchScreen:
           UIColorName: ""

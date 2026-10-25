@@ -32,10 +32,34 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.testButton).setOnClickListener { runTest() }
         findViewById<MaterialButton>(R.id.saveButton).setOnClickListener { saveAndClose() }
 
+        setupCorp()
         setupAccount()
         setupOffline()
         handleIntent(intent)
     }
+
+    // ---------- Korporacja ----------
+    private fun setupCorp() {
+        val input = findViewById<EditText>(R.id.corpInput)
+        val info = findViewById<TextView>(R.id.corpInfo)
+        input.setText(Prefs.corp(this))
+        fun check(showOk: Boolean) {
+            val code = input.text.toString().trim().lowercase()
+            Prefs.setCorp(this, code)
+            if (code.isEmpty()) { info.text = "Bez kodu aplikacja nie pokazuje cen."; return }
+            info.text = "Sprawdzam…"
+            lifecycleScope.launch {
+                info.text = try {
+                    val name = Api(normalizedServer(), key.text.toString().trim(), Prefs.userToken(this@SettingsActivity)).corpName(code)
+                    if (name != null) { if (showOk) toast("Korporacja: $name"); "✅ $name — ceny wg jej cennika" } else "❌ Nieznany kod korporacji"
+                } catch (e: ApiException) { "⚠️ ${e.message}" }
+            }
+        }
+        findViewById<MaterialButton>(R.id.corpButton).setOnClickListener { check(true) }
+        if (Prefs.corp(this).isNotEmpty() && Prefs.server(this).isNotEmpty()) check(false)
+        corpInput = input
+    }
+    private var corpInput: EditText? = null
 
     // ---------- Konto kierowcy ----------
     private fun setupAccount() {
@@ -170,6 +194,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun saveAndClose() {
         Prefs.save(this, normalizedServer(), key.text.toString())
+        corpInput?.let { Prefs.setCorp(this, it.text.toString()) }
         // Otwarte z linku/aparatu — po zapisie przejdź do mapy.
         if (isTaskRoot) startActivity(Intent(this, MainActivity::class.java))
         finish()

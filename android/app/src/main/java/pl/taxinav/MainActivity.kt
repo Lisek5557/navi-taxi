@@ -457,9 +457,10 @@ class MainActivity : AppCompatActivity() {
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
         ))
+        // Obwódka ciemna i szeroka — trasa odcina się od kolorowej warstwy korków.
         add(LineLayer("route-casing", "route-src").withProperties(
-            PropertyFactory.lineColor("#FFFFFF"),
-            PropertyFactory.lineWidth(11f),
+            PropertyFactory.lineColor("#0B2E6B"),
+            PropertyFactory.lineWidth(13f),
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
         ))
@@ -467,13 +468,13 @@ class MainActivity : AppCompatActivity() {
             PropertyFactory.lineColor(
                 Expression.match(
                     Expression.get("level"), Expression.color(color(R.color.route_unknown)),
-                    Expression.stop(0, Expression.color(color(R.color.traffic_free))),
+                    Expression.stop(0, Expression.color(color(R.color.route_unknown))),   // płynnie = niebieska trasa
                     Expression.stop(1, Expression.color(color(R.color.traffic_slow))),
                     Expression.stop(2, Expression.color(color(R.color.traffic_jam))),
                     Expression.stop(3, Expression.color(color(R.color.traffic_stop))),
                 )
             ),
-            PropertyFactory.lineWidth(7f),
+            PropertyFactory.lineWidth(8.5f),
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
         ))
@@ -551,7 +552,7 @@ class MainActivity : AppCompatActivity() {
         tiles.minZoom = 6f
         tiles.maxZoom = 18f
         s.addSource(RasterSource("traffic-src", tiles, 256))
-        s.addLayerBelow(RasterLayer("traffic-layer", "traffic-src").withProperties(PropertyFactory.rasterOpacity(0.75f)), "alt-line")
+        s.addLayerBelow(RasterLayer("traffic-layer", "traffic-src").withProperties(PropertyFactory.rasterOpacity(if (routeResp != null) 0.35f else 0.75f)), "alt-line")
     }
 
     private fun color(id: Int) = ContextCompat.getColor(this, id)
@@ -559,6 +560,8 @@ class MainActivity : AppCompatActivity() {
     /** Trasa jako odcinki pokolorowane wg korków. */
     private fun drawRoute(resp: RouteResponse?, fromIndex: Int = 0) {
         val s = style ?: return
+        // Przy wyznaczonej trasie warstwa korków bledsza, żeby nie zlewała się z trasą.
+        s.getLayer("traffic-layer")?.setProperties(PropertyFactory.rasterOpacity(if (resp != null) 0.35f else 0.75f))
         val routeSrc = s.getSourceAs<GeoJsonSource>("route-src")
         val altSrc = s.getSourceAs<GeoJsonSource>("alt-src")
         if (resp == null) {
@@ -1161,6 +1164,7 @@ class MainActivity : AppCompatActivity() {
             })
             if (r.hasTraffic) append(if (delayS >= 60) " · korki +${delayS / 60} min" else " · bez korków")
             else append(" · brak danych o korkach")
+            if (r.fare == null && Prefs.corp(this@MainActivity).isEmpty()) append("\nWpisz kod korporacji w Ustawieniach, aby widzieć ceny")
             r.fare?.let { f ->
                 append("\nCena szacunkowa · taryfa ${f.tariffCity}${if (f.outKm > 0.05) "/${f.tariffOut}" else ""}")
                 if (f.discountPct > 0) append(" · rabat ${f.discountPct}%")
@@ -1183,6 +1187,7 @@ class MainActivity : AppCompatActivity() {
             append("\nRAZEM (taksometr): ${z(f.total)}\n")
             if (f.flatValue != null) append("Ryczałt ${f.flatCity?.replaceFirstChar { it.uppercase() }}: ${z(f.flatValue)}\n")
             append("\n${if (f.night) "Taryfa nocna / niedziela / święto" else "Taryfa dzienna"} · ${f.tariffName}")
+            f.corp?.let { append("\nKorporacja: $it") }
             if (f.districtA != null || f.districtB != null) append("\nStart: ${f.districtA ?: "—"}\nCel: ${f.districtB ?: "—"}")
             append("\n\nTo szacunek — kwota na taksometrze zależy od faktycznej trasy i postojów.")
         }
@@ -1683,7 +1688,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() { super.onStart(); mapView.onStart() }
     override fun onResume() {
         super.onResume(); mapView.onResume()
-        style?.let { updateTrafficLayer(it) } // po zmianie ustawień
+        style?.let { updateTrafficLayer(it); loadDiscountZones() } // po zmianie ustawień (np. kod korporacji)
         reloadStyleIfNeeded()
         renderFavorites()
     }

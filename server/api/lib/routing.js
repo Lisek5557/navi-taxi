@@ -150,7 +150,7 @@ export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, toleranceP
     c.sections = cam.sections;
   }
 
-  async function route({ from, to, heading, via = [] }) {
+  async function route({ from, to, heading, via = [] }, { corp = null } = {}) {
     const start = { lat: from.lat, lon: from.lon, type: 'break' };
     if (typeof heading === 'number' && heading >= 0) {
       start.heading = Math.round(heading);
@@ -185,7 +185,7 @@ export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, toleranceP
       c.hasTraffic = t.hasData;
     }));
 
-    if (fare) for (const c of cands) c.fare = fare.estimate(c.points, { trafficDelayS: c.trafficTime - c.baseTime });
+    if (fare && corp) for (const c of cands) c.fare = { ...fare.estimate(c.points, { trafficDelayS: c.trafficTime - c.baseTime, tariff: corp.tariff, discountZones: corp.discountZones }), corp: corp.name };
     const chosen = pickReasonable(cands, { tolerancePct, maxExtraSec });
     const strip = (c) => ({
       kinds: c.kinds,

@@ -17,7 +17,7 @@ final class MapController: NSObject, MLNMapViewDelegate {
         "closed": ("⛔", UIColor(rgb: 0x8E1B1B)),
     ]
     static let trafficColors: [(Int, UIColor)] = [
-        (-1, UIColor(rgb: 0x3478F6)), (0, UIColor(rgb: 0x2E9E5B)), (1, UIColor(rgb: 0xF5A623)),
+        (-1, UIColor(rgb: 0x3478F6)), (0, UIColor(rgb: 0x3478F6)), (1, UIColor(rgb: 0xF5A623)),
         (2, UIColor(rgb: 0xE5482F)), (3, UIColor(rgb: 0x8E1B1B)),
     ]
 
@@ -84,12 +84,12 @@ final class MapController: NSObject, MLNMapViewDelegate {
         add(alt)
         let route = source("route-src")!
         let casing = MLNLineStyleLayer(identifier: "route-casing", source: route)
-        casing.lineColor = c(UIColor.white); casing.lineWidth = c(11); casing.lineCap = c("round"); casing.lineJoin = c("round")
+        casing.lineColor = c(UIColor(rgb: 0x0B2E6B)); casing.lineWidth = c(13); casing.lineCap = c("round"); casing.lineJoin = c("round")
         add(casing)
         for (lvl, col) in MapController.trafficColors {
             let l = MLNLineStyleLayer(identifier: "route-line-\(lvl)", source: route)
             l.predicate = NSPredicate(format: "level == %d", lvl)
-            l.lineColor = c(col); l.lineWidth = c(7); l.lineCap = c("round"); l.lineJoin = c("round")
+            l.lineColor = c(col); l.lineWidth = c(8.5); l.lineCap = c("round"); l.lineJoin = c("round")
             add(l)
         }
 
@@ -140,6 +140,8 @@ final class MapController: NSObject, MLNMapViewDelegate {
     }
 
     func drawRoute(_ resp: RouteResponse?, navigating: Bool, fromIndex: Int = 0) {
+        // Przy wyznaczonej trasie warstwa korków bledsza, żeby nie zlewała się z trasą.
+        (style?.layer(withIdentifier: "traffic-layer") as? MLNRasterStyleLayer)?.rasterOpacity = NSExpression(forConstantValue: resp != nil ? 0.35 : 0.75)
         guard let resp = resp else {
             source("route-src")?.shape = nil
             source("alt-src")?.shape = nil

@@ -17,6 +17,11 @@ enum Prefs {
         get { d.string(forKey: "key") ?? "" }
         set { d.set(newValue.trimmingCharacters(in: .whitespaces), forKey: "key") }
     }
+    /// Kod korporacji — wybiera cennik i strefy rabatowe na serwerze.
+    static var corp: String {
+        get { d.string(forKey: "corp") ?? "" }
+        set { d.set(newValue.trimmingCharacters(in: .whitespaces).lowercased(), forKey: "corp") }
+    }
     static var routeMode: String {
         get { d.string(forKey: "routeMode") ?? "optimal" }
         set { d.set(newValue, forKey: "routeMode") }
@@ -91,9 +96,10 @@ final class Api {
     let server: String
     let key: String
     let userToken: String
+    let corp: String
 
-    init(server: String = Prefs.server, key: String = Prefs.apiKey, userToken: String = Prefs.userToken) {
-        self.server = server; self.key = key; self.userToken = userToken
+    init(server: String = Prefs.server, key: String = Prefs.apiKey, userToken: String = Prefs.userToken, corp: String = Prefs.corp) {
+        self.server = server; self.key = key; self.userToken = userToken; self.corp = corp
     }
 
     private static let session: URLSession = {
@@ -110,6 +116,7 @@ final class Api {
         req.httpMethod = method
         req.setValue(key, forHTTPHeaderField: "X-Api-Key")
         if !userToken.isEmpty { req.setValue(userToken, forHTTPHeaderField: "X-User-Token") }
+        if !corp.isEmpty { req.setValue(corp, forHTTPHeaderField: "X-Corp") }
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body = body {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -197,6 +204,13 @@ final class Api {
     func reverse(_ p: LatLon) async throws -> String? {
         let j = try await obj("GET", "/reverse?lat=\(p.lat)&lon=\(p.lon)")
         return j.obj("address")?.strOrNil("label") ?? j.strOrNil("city")
+    }
+
+    /// Nazwa korporacji dla kodu (nil = nieznany kod).
+    func corpName(_ code: String) async throws -> String? {
+        do {
+            return try await obj("GET", "/corp?corp=" + Api.q(code.trimmingCharacters(in: .whitespaces))).obj("corp")?.strOrNil("name")
+        } catch let e as ApiError where e.code == 404 { return nil }
     }
 
     func discountZones() async throws -> Data {

@@ -38,6 +38,7 @@ struct Fare {
     var discountPct: Int, discountReason: String?
     var flatCity: String?, flatValue: Double?
     var districtA: String?, districtB: String?, tariffName: String
+    var corp: String? = nil
 
     static func zl(_ v: Double) -> String { String(format: "%.2f zł", v).replacingOccurrences(of: ".", with: ",") }
     static func zlShort(_ v: Double) -> String { "\(Int(v.rounded())) zł" }
@@ -196,7 +197,8 @@ enum RouteParser {
                         night: f.bool("night"), tariffCity: f.int("tariffCity", 1), tariffOut: f.int("tariffOut", 3),
                         discountPct: f.int("discountPct"), discountReason: f.strOrNil("discountReason"),
                         flatCity: flat?.strOrNil("city"), flatValue: flat?.doubleOrNil("value"),
-                        districtA: f.strOrNil("districtA"), districtB: f.strOrNil("districtB"), tariffName: f.str("tariffName"))
+                        districtA: f.strOrNil("districtA"), districtB: f.strOrNil("districtB"), tariffName: f.str("tariffName"),
+                        corp: f.strOrNil("corp"))
         }
         return Route(
             points: Polyline.decode(o.str("shape")),

@@ -35,7 +35,7 @@ jobs:
           xcrun simctl privacy "$UDID" grant location-always pl.taxinav || true
           xcrun simctl location "$UDID" set 53.1235,18.0084
           mkdir -p shots
-          xcrun simctl launch "$UDID" pl.taxinav -server http://localhost:8080 -key sekret \
+          xcrun simctl launch "$UDID" pl.taxinav -server http://localhost:8080 -key sekret -corp zt19622 \
             -openURL "taxinav://navigate?lat=53.1289&lon=18.0204&label=Dworzec&start=1"
           sleep 9
           xcrun simctl io "$UDID" screenshot shots/1-podglad.png

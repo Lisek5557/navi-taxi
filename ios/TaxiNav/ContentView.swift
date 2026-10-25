@@ -173,12 +173,12 @@ struct ContentView: View {
         let next = st?.nextManeuver
         return VStack(spacing: 6) {
             HStack(spacing: 14) {
-                Text(Maneuvers.arrow(next?.type ?? 8)).font(.system(size: 46, weight: .bold)).foregroundColor(.white).frame(minWidth: 56)
+                Text(Maneuvers.arrow(next?.type ?? 8)).font(.system(size: 40, weight: .bold)).foregroundColor(.white).frame(minWidth: 46)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(st.map { Speech.short($0.distanceToNextM) } ?? "—").font(.system(size: 30, weight: .bold)).foregroundColor(.white)
-                    Text(next?.instruction ?? "Jedź zgodnie z trasą").font(.system(size: 18)).foregroundColor(.white).lineLimit(2)
+                    Text(st.map { Speech.short($0.distanceToNextM) } ?? "—").font(.system(size: 27, weight: .bold)).foregroundColor(.white)
+                    Text(next?.instruction ?? "Jedź zgodnie z trasą").font(.system(size: 16)).foregroundColor(.white).lineLimit(2)
+                        .frame(maxWidth: 230, alignment: .leading)
                 }
-                Spacer()
             }
             if let lanes = st?.lanes {
                 HStack(spacing: 4) {
@@ -190,10 +190,11 @@ struct ContentView: View {
                 .padding(.vertical, 2).background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.35)))
             }
         }
-        .padding(14)
+        .padding(.vertical, 10).padding(.leading, 8).padding(.trailing, 16)
         .background(RoundedRectangle(cornerRadius: 16).fill(Color(red: 0x1B / 255, green: 0x6B / 255, blue: 0x3A / 255)))
         .background(GeometryReader { g in Color.clear.onAppear { m.topInset = g.size.height } })
         .padding(.top, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)   // kompaktowy baner — po prawej widać mapę
     }
 
     // MARK: - Prędkość i przyciski boczne
@@ -312,6 +313,7 @@ struct ContentView: View {
         }
         let delay = r.trafficTimeS - r.baseTimeS
         s += r.hasTraffic ? (delay >= 60 ? " · korki +\(delay / 60) min" : " · bez korków") : " · brak danych o korkach"
+        if r.fare == nil && Prefs.corp.isEmpty { s += "\nWpisz kod korporacji w Ustawieniach, aby widzieć ceny" }
         if let f = r.fare {
             s += "\nCena szacunkowa · taryfa \(f.tariffCity)" + (f.outKm > 0.05 ? "/\(f.tariffOut)" : "")
             if f.discountPct > 0 { s += " · rabat \(f.discountPct)%" }

@@ -11,8 +11,8 @@ android {
         applicationId = "pl.taxinav"
         minSdk = 24
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.8.0"
+        versionCode = 9
+        versionName = "0.9.0"
     }
 
     // Stały klucz testowy w repo: każda wersja z GitHuba instaluje się na poprzednią.

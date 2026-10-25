@@ -57,6 +57,7 @@ data class Fare(
     val discountPct: Int, val discountReason: String?,
     val flatCity: String?, val flatValue: Double?,
     val districtA: String?, val districtB: String?, val tariffName: String,
+    val corp: String? = null,
 ) {
     companion object {
         fun zl(v: Double) = String.format(java.util.Locale.forLanguageTag("pl-PL"), "%.2f zł", v)

@@ -7,7 +7,8 @@ import { qrSvg } from './lib/qr.js';
 import { buildStyle } from './lib/style.js';
 import { openDb } from './lib/db.js';
 import { makeCommunity, REPORT_TYPES } from './lib/community.js';
-import { makeFare, loadZones, DEFAULT_TARIFF, DEFAULT_DISCOUNT_ZONES } from './lib/fare.js';
+import { makeFare, loadZones } from './lib/fare.js';
+import { makeCorps, normCode } from './lib/corps.js';
 import { makeCameras } from './lib/cameras.js';
 
 export function createServer(cfg, deps = {}) {
@@ -16,17 +17,16 @@ export function createServer(cfg, deps = {}) {
   const db = deps.db || openDb(cfg.dbFile);
   const community = makeCommunity(db, deps.now ? { now: deps.now } : {});
   const geocoder = deps.geocoder !== undefined ? deps.geocoder : loadGeocoder(cfg.addressFile);
-  if (!db.data.tariff) db.data.tariff = structuredClone(DEFAULT_TARIFF);
-  if (!db.data.discountZones) db.data.discountZones = structuredClone(DEFAULT_DISCOUNT_ZONES);
+  const corps = makeCorps(db);
   const zones = deps.zones || loadZones(cfg.zonesFile);
   const fare = makeFare({
-    zones, getTariff: () => db.data.tariff, getDiscountZones: () => db.data.discountZones,
+    zones,
     cityOf: (la, lo) => geocoder?.cityAt?.(la, lo) ?? null,
   });
-  function applyFareConfig(b) {
+  function applyFareConfig(corp, b) {
     const num = (v, d) => (Number.isFinite(+v) && v !== '' && v !== null ? +v : d);
     if (b.tariff) {
-      const t = db.data.tariff, n = b.tariff;
+      const t = corp.tariff, n = b.tariff;
       for (const k of ['startFee', 'cityDay', 'cityNight', 'outDay', 'outNight', 'trafficHour', 'discountPercent', 'discountAutoOutKm', 'nightFrom', 'nightTo', 'stepKm']) {
         if (k in n) t[k] = num(n[k], t[k]);
       }
@@ -35,10 +35,11 @@ export function createServer(cfg, deps = {}) {
       if (Array.isArray(n.flatRates)) t.flatRates = n.flatRates.filter((r) => r && r.city).map((r) => ({ city: String(r.city).toLowerCase().trim(), day: num(r.day, 0), night: num(r.night, 0) }));
     }
     if (Array.isArray(b.discountZones)) {
-      db.data.discountZones = b.discountZones.filter((z) => z && z.name && (z.district || (Array.isArray(z.points) && z.points.length >= 3)))
+      corp.discountZones = b.discountZones.filter((z) => z && z.name && (z.district || (Array.isArray(z.points) && z.points.length >= 3)))
         .map((z, i) => ({ id: String(z.id || `z${Date.now()}${i}`), name: String(z.name).slice(0, 60), percent: Math.max(0, Math.min(100, num(z.percent, 0))),
           ...(z.district ? { district: String(z.district) } : { points: z.points.map(([la, lo]) => [+la, +lo]) }) }));
     }
+    if (typeof b.name === 'string' && b.name.trim()) corp.name = b.name.trim().slice(0, 60);
     db.save();
   }
   const cameras = deps.cameras || makeCameras({ file: cfg.camerasFile, pbf: cfg.pbfFile, fetchImpl });
@@ -122,6 +123,9 @@ export function createServer(cfg, deps = {}) {
         if (!user) throw Object.assign(new Error('Zarejestruj się w Ustawieniach'), { status: 401 });
         return user;
       };
+      // Kod korporacji (Ustawienia w aplikacji) — wybiera cennik i strefy rabatowe.
+      const corp = corps.get(req.headers['x-corp'] || url.searchParams.get('corp'));
+      const isAdmin = adminKeyOk || user?.role === 'admin';
       const needAdmin = () => {
         const u = needUser();
         if (u.role !== 'admin') throw Object.assign(new Error('Tylko dla admina'), { status: 403 });
@@ -183,19 +187,41 @@ export function createServer(cfg, deps = {}) {
       }
 
       // ----- Wycena kursów: strefy rabatowe i cennik -----
-      if (req.method === 'GET' && url.pathname === '/fare/zones') return send(res, 200, fare.discountGeoJson());
+      if (req.method === 'GET' && url.pathname === '/corp') {
+        if (!corp) return send(res, 404, { error: 'Nieznany kod korporacji' });
+        return send(res, 200, { corp: { code: corp.code, name: corp.name } });
+      }
+      if (req.method === 'GET' && url.pathname === '/fare/zones') {
+        return send(res, 200, corp ? fare.discountGeoJson(corp.discountZones) : { type: 'FeatureCollection', features: [] });
+      }
       if (req.method === 'GET' && url.pathname === '/fare/config') {
-        return send(res, 200, { tariff: db.data.tariff, discountZones: db.data.discountZones, districts: zones.districts.map((d) => d.id) });
+        if (!isAdmin) return send(res, 403, { error: 'Tylko dla admina' });
+        return send(res, 200, { corps: corps.list(), corp: corp ? { code: corp.code, name: corp.name } : null,
+          tariff: corp?.tariff ?? null, discountZones: corp?.discountZones ?? [], districts: zones.districts.map((d) => d.id) });
       }
       if (req.method === 'POST' && url.pathname === '/fare/config') {
-        if (!adminKeyOk && user?.role !== 'admin') return send(res, 403, { error: 'Tylko dla admina' });
-        applyFareConfig(await readJson(req));
+        if (!isAdmin) return send(res, 403, { error: 'Tylko dla admina' });
+        const b = await readJson(req);
+        const c = corps.get(b.corp) || corp;
+        if (!c) return send(res, 404, { error: 'Nieznany kod korporacji' });
+        applyFareConfig(c, b);
+        return send(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && url.pathname === '/corps') {
+        if (!isAdmin) return send(res, 403, { error: 'Tylko dla admina' });
+        const c = corps.create(await readJson(req));
+        return send(res, 200, { corp: { code: c.code, name: c.name } });
+      }
+      if (req.method === 'POST' && url.pathname === '/corps/delete') {
+        if (!isAdmin) return send(res, 403, { error: 'Tylko dla admina' });
+        corps.remove((await readJson(req)).code);
         return send(res, 200, { ok: true });
       }
       if (req.method === 'POST' && url.pathname === '/fare/estimate') {
         const b = await readJson(req);
         if (!validPoint(b.from) || !validPoint(b.to)) return send(res, 400, { error: 'Podaj from/to' });
-        return send(res, 200, fare.estimate([[b.from.lat, b.from.lon], [b.to.lat, b.to.lon]]));
+        if (!corp) return send(res, 404, { error: 'Podaj kod korporacji' });
+        return send(res, 200, fare.estimate([[b.from.lat, b.from.lon], [b.to.lat, b.to.lon]], { tariff: corp.tariff, discountZones: corp.discountZones }));
       }
 
       // ----- Anonimowe próbki prędkości (korki od kierowców) -----
@@ -215,7 +241,8 @@ export function createServer(cfg, deps = {}) {
           return send(res, 200, { ok: true });
         }
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-        return res.end(adminPage(db.data, token, zones));
+        const sel = corps.get(url.searchParams.get('corp')) || db.data.corporations[0] || null;
+        return res.end(adminPage(db.data, token, zones, sel, corps.list()));
       }
 
       // Strona konfiguracji z kodem QR (otwiera ją start.bat na komputerze z serwerem).
@@ -256,7 +283,7 @@ ${card('W tej samej sieci Wi-Fi', lan, 'Działa tylko w zasięgu domowego Wi-Fi.
       if (req.method === 'POST' && url.pathname === '/route') {
         const body = await readJson(req);
         if (!validPoint(body.from) || !validPoint(body.to)) return send(res, 400, { error: 'Podaj from/to jako {lat, lon}' });
-        const out = await router.route(body);
+        const out = await router.route(body, { corp });
         return send(res, 200, out);
       }
 
@@ -311,7 +338,7 @@ ${card('W tej samej sieci Wi-Fi', lan, 'Działa tylko w zasięgu domowego Wi-Fi.
   });
 }
 
-function adminPage(D, key, zones) {
+function adminPage(D, key, zones, sel, corpList) {
   const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const when = (t) => new Date(t).toLocaleString('pl-PL');
   const users = D.users.map((u) => `<tr><td>${u.id}</td><td>${esc(u.name)}</td><td>${u.blocked ? '<b class="bad">zablokowany</b>' : u.role === 'admin' ? '<b class="ok">admin</b>' : 'kierowca'}</td><td>${when(u.created)}</td>
@@ -319,10 +346,10 @@ function adminPage(D, key, zones) {
   const pend = D.limitReports.filter((r) => r.status === 'pending').map((r) => `<tr><td>${when(r.created)}</td><td>${esc(r.userName)}</td><td><b>${r.value} km/h</b></td>
     <td><a target="_blank" href="https://www.openstreetmap.org/?mlat=${r.lat}&mlon=${r.lon}#map=18/${r.lat}/${r.lon}">mapa</a> ${r.heading != null ? `(kierunek ${r.heading}°)` : ''}</td><td>${esc(r.note)}</td>
     <td><button class="ok" onclick="act({limitId:${r.id},approve:true})">Zatwierdź</button><button class="bad" onclick="act({limitId:${r.id},approve:false})">Odrzuć</button></td></tr>`).join('') || '<tr><td colspan="6">Brak zgłoszeń do zatwierdzenia</td></tr>';
-  const T = D.tariff || {};
+  const T = sel?.tariff || {};
   const fld = (k, label, step = '0.01') => `<label>${label}<input type="number" step="${step}" id="t_${k}" value="${esc(T[k])}"></label>`;
   const flat = (T.flatRates || []).map((r) => `${r.city};${r.day};${r.night}`).join('\n');
-  const data = JSON.stringify({ districts: zones.districts, city: zones.city, discountZones: D.discountZones || [] }).replace(/</g, '\\u003c');
+  const data = JSON.stringify({ districts: zones.districts, city: zones.city, discountZones: sel?.discountZones || [] }).replace(/</g, '\\u003c');
   return `<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TaxiNav — admin</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>body{background:#15171c;color:#f3f4f6;font:15px system-ui,Segoe UI,sans-serif;padding:20px;max-width:1200px;margin:auto}h1 span{color:#ffc629}h2{margin-top:34px}
@@ -334,14 +361,25 @@ label{display:flex;flex-direction:column;font-size:13px;color:#a3a9b5;gap:4px}in
 .hint{color:#a3a9b5;font-size:13px}.pill{background:#1f232b;border-radius:10px;padding:14px;margin-top:8px}</style></head><body>
 <h1><span>Taxi</span>Nav — panel admina</h1>
 
-<h2>Strefy rabatowe</h2>
+<h2>Korporacje</h2>
+<div class="pill"><p class="hint">Każda korporacja ma własny cennik i strefy rabatowe. Kierowca wpisuje w aplikacji tylko <b>kod korporacji</b> (Ustawienia) i dostaje jej ceny.</p>
+<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+<label>Edytujesz korporację<select id="corpSel" onchange="location.href='/admin?k='+encodeURIComponent(KEY)+'&corp='+encodeURIComponent(this.value)">
+${corpList.map((c) => `<option value="${esc(c.code)}"${sel && c.code === sel.code ? ' selected' : ''}>${esc(c.name)} — kod ${esc(c.code)}</option>`).join('')}</select></label>
+<label>Nazwa<input id="corpName" value="${esc(sel?.name)}"></label>
+<button onclick="renameCorp()">Zmień nazwę</button>
+<button class="primary" onclick="newCorp()">＋ Nowa korporacja</button>
+<button class="bad" onclick="delCorp()">Usuń tę korporację</button></div>
+<p class="hint">Kod dla kierowców: <code style="color:#ffc629;font-size:18px">${esc(sel?.code ?? '—')}</code></p></div>
+
+<h2>Strefy rabatowe — ${esc(sel?.name ?? '')}</h2>
 <p class="hint">Jeśli kurs <b>zaczyna się lub kończy</b> w strefie, rabat obejmuje część kilometrową (opłata początkowa bez rabatu). Kliknij rejon na mapie, aby dodać/usunąć go jako strefę. „Rysuj własną” — klikaj punkty obszaru, potem „Zakończ”.</p>
 <div id="map"></div>
 <div><button id="drawBtn">✏️ Rysuj własną strefę</button><button id="finishBtn" style="display:none">✔ Zakończ rysowanie</button>
 <button class="primary" onclick="saveZones()">Zapisz strefy</button></div>
 <div id="zones" class="pill"></div>
 
-<h2>Cennik (szacowanie cen w aplikacji)</h2>
+<h2>Cennik — ${esc(sel?.name ?? '')}</h2>
 <div class="pill"><div class="grid">
 <label>Nazwa cennika<input id="t_name" value="${esc(T.name)}"></label>
 ${fld('startFee', 'Opłata początkowa (zł)')}${fld('cityDay', 'Miejska — dzień, taryfa 1 (zł/km)')}${fld('cityNight', 'Miejska — noc, taryfa 2 (zł/km)')}
@@ -358,7 +396,7 @@ ${fld('nightFrom', 'Noc od godziny', '1')}${fld('nightTo', 'Noc do godziny', '1'
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const KEY=${JSON.stringify(key)}; const DATA=${data};
+const KEY=${JSON.stringify(key)}; const DATA=${data}; const CORP=${JSON.stringify(sel?.code ?? null)};
 async function post(path,b){const r=await fetch(path+'?k='+encodeURIComponent(KEY),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});if(!r.ok)alert('Błąd: '+(await r.text()));return r.ok}
 async function act(b){await post('/admin',b);location.reload()}
 let zonesState=DATA.discountZones.map(z=>({...z}));
@@ -379,12 +417,18 @@ document.getElementById('drawBtn').onclick=()=>{drawing=true;pts=[];document.get
 map.on('click',e=>{if(!drawing)return;pts.push([e.latlng.lat,e.latlng.lng]);if(tmp)map.removeLayer(tmp);tmp=L.polygon(pts,{color:'#ffc629'}).addTo(map)});
 document.getElementById('finishBtn').onclick=()=>{drawing=false;map.getContainer().style.cursor='';document.getElementById('finishBtn').style.display='none';if(tmp)map.removeLayer(tmp);
  if(pts.length>=3){const name=prompt('Nazwa strefy','Strefa rabatowa')||'Strefa rabatowa';const pct=+prompt('Rabat %','20')||20;zonesState.push({name,percent:pct,points:pts})}render()};
-async function saveZones(){if(await post('/fare/config',{discountZones:zonesState}))alert('Zapisano strefy rabatowe')}
+async function saveZones(){if(await post('/fare/config',{corp:CORP,discountZones:zonesState}))alert('Zapisano strefy rabatowe')}
+function goCorp(c){location.href='/admin?k='+encodeURIComponent(KEY)+'&corp='+encodeURIComponent(c)}
+async function renameCorp(){if(await post('/fare/config',{corp:CORP,name:document.getElementById('corpName').value}))location.reload()}
+async function newCorp(){const code=(prompt('Kod korporacji (kierowcy wpiszą go w aplikacji), np. radiotaxi24')||'').trim().toLowerCase();if(!code)return;
+ const name=prompt('Nazwa korporacji',code)||code;const copy=confirm('Skopiować cennik i strefy z obecnej korporacji? (Anuluj = cennik domyślny)');
+ if(await post('/corps',{code,name,copyFrom:copy?CORP:null}))goCorp(code)}
+async function delCorp(){if(!CORP||!confirm('Usunąć korporację '+CORP+'? Kierowcy z tym kodem przestaną widzieć ceny.'))return;if(await post('/corps/delete',{code:CORP}))location.href='/admin?k='+encodeURIComponent(KEY)}
 async function saveTariff(){const g=k=>document.getElementById('t_'+k).value;const t={name:g('name')};
  ['startFee','cityDay','cityNight','outDay','outNight','trafficHour','stepKm','discountPercent','discountAutoOutKm','nightFrom','nightTo'].forEach(k=>t[k]=g(k));
  t.nightSundays=g('nightSundays')==='1';
  t.flatRates=document.getElementById('flat').value.split('\\n').map(l=>l.split(';')).filter(a=>a[0]&&a[0].trim()).map(a=>({city:a[0],day:a[1],night:a[2]}));
- if(await post('/fare/config',{tariff:t}))alert('Zapisano cennik')}
+ if(await post('/fare/config',{corp:CORP,tariff:t}))alert('Zapisano cennik')}
 render();
 </script></body></html>`;
 }

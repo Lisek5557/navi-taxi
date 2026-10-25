@@ -87,13 +87,13 @@ export function loadZones(path) {
  * discountZones: [{id, name, percent, district?, points?}]
  * dest: { city?: string } — miejscowość celu (do ryczałtów)
  */
-export function makeFare({ zones, getTariff, getDiscountZones, cityOf = () => null }) {
+export function makeFare({ zones, getTariff = () => DEFAULT_TARIFF, getDiscountZones = () => [], cityOf = () => null }) {
   const polyOf = (z) => z.points || zones.districts.find((d) => d.id === z.district)?.points || null;
   const inCity = (lat, lon) => zones.city.some((z) => inPolygon(lat, lon, z.points));
   const districtAt = (lat, lon) => zones.districts.find((z) => inPolygon(lat, lon, z.points))?.id || null;
 
-  function estimate(points, { trafficDelayS = 0, now = new Date() } = {}) {
-    const T = { ...DEFAULT_TARIFF, ...getTariff() };
+  function estimate(points, { trafficDelayS = 0, now = new Date(), tariff = null, discountZones = null } = {}) {
+    const T = { ...DEFAULT_TARIFF, ...(tariff || getTariff()) };
     if (points.length < 2) return null;
     let cityKm = 0, outKm = 0;
     for (let i = 0; i < points.length - 1; i++) {
@@ -112,7 +112,7 @@ export function makeFare({ zones, getTariff, getDiscountZones, cityOf = () => nu
     // Rabat: strefa rabatowa na początku LUB końcu kursu, albo wyjazd poza miasto.
     const a = points[0], b = points[points.length - 1];
     let discountPct = 0, discountReason = null;
-    for (const z of getDiscountZones()) {
+    for (const z of (discountZones || getDiscountZones())) {
       const poly = polyOf(z);
       if (!poly || !(z.percent > 0)) continue;
       const hit = inPolygon(a[0], a[1], poly) ? 'start' : inPolygon(b[0], b[1], poly) ? 'koniec' : null;
@@ -147,10 +147,10 @@ export function makeFare({ zones, getTariff, getDiscountZones, cityOf = () => nu
   }
 
   /** Strefy rabatowe jako GeoJSON (do pokazania na mapie). */
-  function discountGeoJson() {
+  function discountGeoJson(list = null) {
     return {
       type: 'FeatureCollection',
-      features: getDiscountZones().map((z) => {
+      features: (list || getDiscountZones()).map((z) => {
         const p = polyOf(z);
         if (!p) return null;
         const ring = p.map(([lat, lon]) => [lon, lat]);

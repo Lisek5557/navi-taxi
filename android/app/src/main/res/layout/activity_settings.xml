@@ -80,6 +80,44 @@
             android:textColor="@color/text"
             android:textSize="15sp" />
 
+        <!-- Korporacja (cennik i rabaty) -->
+        <TextView
+            style="@style/Label"
+            android:layout_marginTop="28dp"
+            android:text="Kod korporacji (cennik i rabaty)"
+            android:textColor="@color/text" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/corpInput"
+                style="@style/Field"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:hint="np. zt19622"
+                android:inputType="textVisiblePassword" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/corpButton"
+                android:layout_width="wrap_content"
+                android:layout_height="56dp"
+                android:layout_marginStart="8dp"
+                android:layout_marginTop="6dp"
+                android:text="Sprawdź" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/corpInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Kod dostaniesz od swojej korporacji. Bez kodu aplikacja nie pokazuje cen."
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp" />
+
         <!-- Konto kierowcy -->
         <TextView
             style="@style/Label"

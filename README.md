@@ -49,6 +49,24 @@ Skróty (dwuklik): `start.bat` · `qr.bat` (kod QR dla telefonów) · `status.ba
    Możesz też zeskanować kod zwykłym aparatem telefonu, wtedy TaxiNav otworzy się z gotowymi ustawieniami.
 4. Polski głos: Ustawienia telefonu → Zamiana tekstu na mowę → Google, język polski (pobierz dane głosu).
 
+## 3. iPhone (AltServer, bez Maca)
+
+Plik `.ipa` buduje GitHub Actions (`.github/workflows/build-ipa.yml`, macOS) bez podpisu — podpisuje go AltServer
+Twoim Apple ID. Stały link: https://github.com/Lisek5557/navi-taxi/releases/download/ios/TaxiNav.ipa
+
+1. Na Windows: iTunes i iCloud **ze strony Apple** (nie ze Sklepu Microsoft), potem AltServer z altstore.io.
+2. iPhone kablem do komputera, w iTunes zaznacz „Synchronizuj z tym iPhone'em przez Wi-Fi”.
+3. Ikona AltServer w zasobniku → **Install AltStore** → wybierz iPhone'a → Apple ID.
+   Na iPhonie: Ustawienia → Ogólne → VPN i urządzenia → zaufaj swojemu Apple ID; iOS 16+: włącz **Tryb dewelopera**
+   (Ustawienia → Prywatność i ochrona → Tryb dewelopera, restart).
+4. Pobierz `TaxiNav.ipa`, potem AltServer → **Sideload .ipa** (albo w AltStore na iPhonie: My Apps → „+”).
+5. Darmowe Apple ID: aplikacja działa **7 dni**, potem odśwież ją w AltStore (komputer z AltServerem w tej samej sieci Wi-Fi).
+   Najwyżej 3 aplikacje z AltStore naraz.
+
+Konfiguracja jak na Androidzie: zeskanuj kod z `qr.bat` aparatem iPhone'a. Na iPhonie nie ma okienka obraz w obrazie
+ani CarPlay (wymaga zgody Apple). Nawigacja działa w tle (niebieski wskaźnik lokalizacji), lektor mówi przy wygaszonym ekranie.
+Inne aplikacje i Skróty mogą otworzyć cel: `taxinav://navigate?lat=53.12&lon=18.00&label=Dworzec&start=1`.
+
 ## Aktualizacja bazy adresów
 
 Nowy eksport GeoJSON (Point z `addr:city`, `addr:street`, `addr:housenumber`, `addr:postcode`) wrzuć do `server\data`, potem:
@@ -91,3 +109,9 @@ cd android && gradlew test                      # silnik nawigacji, polskie komu
   liczenie korków z prędkości własnych kierowców.
 - Mapa bazowa: publiczne kafle OpenFreeMap. Docelowo własny serwer kafli.
 - Miejsca z nazwą (POI) wyszukuje publiczny Photon. Następny krok: własne POI wyciągnięte z mapy OSM Polski.
+
+## Korporacje (cenniki i rabaty)
+
+Każda korporacja ma własny cennik i strefy rabatowe. Admin zakłada je w panelu (`admin.bat` → „Korporacje” → „＋ Nowa korporacja”),
+kierowca wpisuje w aplikacji tylko **kod korporacji** (Ustawienia → Kod korporacji) i dostaje jej ceny. Bez kodu aplikacja nie pokazuje cen.
+Dotychczasowy cennik (Cennik Z2 + strefa Fordon) ma kod **zt19622**.

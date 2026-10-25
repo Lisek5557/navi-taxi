@@ -24,6 +24,9 @@ object Prefs {
     fun trafficLayer(ctx: Context) = sp(ctx).getBoolean("trafficLayer", true)
     fun save(ctx: Context, server: String, key: String) =
         sp(ctx).edit().putString("server", server.trim().trimEnd('/')).putString("key", key.trim()).apply()
+    /** Kod korporacji — wybiera cennik i strefy rabatowe na serwerze. */
+    fun corp(ctx: Context) = sp(ctx).getString("corp", "")!!
+    fun setCorp(ctx: Context, code: String) = sp(ctx).edit().putString("corp", code.trim().lowercase()).apply()
     fun routeMode(ctx: Context) = sp(ctx).getString("routeMode", "optimal")!!
     fun setRouteMode(ctx: Context, m: String) = sp(ctx).edit().putString("routeMode", m).apply()
     fun mapTheme(ctx: Context) = sp(ctx).getString("mapTheme", "auto")!!
@@ -81,7 +84,7 @@ object Prefs {
     }
 }
 
-class Api(private val server: String, private val key: String, private val userToken: String = "") {
+class Api(private val server: String, private val key: String, private val userToken: String = "", private val corp: String = "") {
 
     suspend fun health(): JSONObject = withContext(Dispatchers.IO) { JSONObject(request("GET", "/health", null)) }
 
@@ -173,6 +176,13 @@ class Api(private val server: String, private val key: String, private val userT
         a?.optString("label")?.takeIf { it.isNotBlank() } ?: j.optString("city").takeIf { it.isNotBlank() && it != "null" }
     }
 
+    /** Nazwa korporacji dla kodu (null = nieznany kod). */
+    suspend fun corpName(code: String): String? = withContext(Dispatchers.IO) {
+        try {
+            JSONObject(request("GET", "/corp?corp=" + URLEncoder.encode(code.trim(), "UTF-8"), null)).getJSONObject("corp").getString("name")
+        } catch (e: ApiException) { if (e.code == 404) null else throw e }
+    }
+
     /** Strefy rabatowe (GeoJSON) do pokazania na mapie. */
     suspend fun discountZones(): String = withContext(Dispatchers.IO) { request("GET", "/fare/zones", null) }
 
@@ -194,6 +204,7 @@ class Api(private val server: String, private val key: String, private val userT
             conn.readTimeout = 25000
             conn.setRequestProperty("X-Api-Key", key)
             if (userToken.isNotEmpty()) conn.setRequestProperty("X-User-Token", userToken)
+            if (corp.isNotEmpty()) conn.setRequestProperty("X-Corp", corp)
             conn.setRequestProperty("Accept", "application/json")
             if (body != null) {
                 conn.doOutput = true
@@ -218,7 +229,7 @@ class Api(private val server: String, private val key: String, private val userT
     }
 
     companion object {
-        fun from(ctx: Context) = Api(Prefs.server(ctx), Prefs.apiKey(ctx), Prefs.userToken(ctx))
+        fun from(ctx: Context) = Api(Prefs.server(ctx), Prefs.apiKey(ctx), Prefs.userToken(ctx), Prefs.corp(ctx))
 
         fun parseRoute(o: JSONObject): Route {
             val mans = o.getJSONArray("maneuvers")
@@ -286,6 +297,7 @@ class Api(private val server: String, private val key: String, private val userT
                         districtA = f.optString("districtA").takeIf { it.isNotBlank() && it != "null" },
                         districtB = f.optString("districtB").takeIf { it.isNotBlank() && it != "null" },
                         tariffName = f.optString("tariffName"),
+                        corp = f.optString("corp").takeIf { it.isNotBlank() && it != "null" },
                     )
                 },
             )

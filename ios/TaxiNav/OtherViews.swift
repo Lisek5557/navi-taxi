@@ -12,6 +12,8 @@ struct SettingsView: View {
     @State private var name = ""
     @State private var account = SettingsView.accountText()
     @State private var scanning = false
+    @State private var corp = Prefs.corp
+    @State private var corpInfo = ""
 
     static func accountText() -> String {
         Prefs.userToken.isEmpty ? "" : "Zalogowano jako \(Prefs.userName)" + (Prefs.userRole == "admin" ? " (admin)" : "")
@@ -33,6 +35,14 @@ struct SettingsView: View {
                     Button("Sprawdź połączenie") { save(); test() }
                     if !result.isEmpty { Text(result).font(.callout) }
                 }
+                Section {
+                    HStack {
+                        TextField("np. zt19622", text: $corp)
+                            .textInputAutocapitalization(.never).disableAutocorrection(true)
+                        Button("Sprawdź") { save(); checkCorp() }
+                    }
+                    if !corpInfo.isEmpty { Text(corpInfo).font(.callout) }
+                } header: { Text("Kod korporacji (cennik i rabaty)") } footer: { Text("Kod dostaniesz od swojej korporacji. Bez kodu aplikacja nie pokazuje cen.") }
                 Section {
                     if account.isEmpty {
                         TextField("Imię albo kod kierowcy", text: $name)
@@ -65,6 +75,7 @@ struct SettingsView: View {
             .onAppear {
                 // Ustawienia mogły przyjść z linku taxinav://setup (aparat).
                 server = Prefs.server; key = Prefs.apiKey
+                if !Prefs.corp.isEmpty && !Prefs.server.isEmpty { checkCorp() }
             }
         }
     }
@@ -79,7 +90,20 @@ struct SettingsView: View {
     private func save() {
         Prefs.server = normalized()
         Prefs.apiKey = key
+        Prefs.corp = corp
         m.settingsChanged()
+    }
+
+    private func checkCorp() {
+        let code = corp.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !code.isEmpty else { corpInfo = "Bez kodu aplikacja nie pokazuje cen."; return }
+        corpInfo = "Sprawdzam…"
+        Task {
+            do {
+                let name = try await Api(server: normalized(), key: key.trimmingCharacters(in: .whitespaces), corp: code).corpName(code)
+                corpInfo = name.map { "✅ \($0) — ceny wg jej cennika" } ?? "❌ Nieznany kod korporacji"
+            } catch { corpInfo = "⚠️ \(error.localizedDescription)" }
+        }
     }
 
     private func test() {
@@ -262,6 +286,7 @@ struct FareView: View {
         if let v = f.flatValue { s += "Ryczałt \((f.flatCity ?? "").capitalized): \(Fare.zl(v))\n" }
         s += "\n\(f.night ? "Taryfa nocna / niedziela / święto" : "Taryfa dzienna") · \(f.tariffName)"
         if f.districtA != nil || f.districtB != nil { s += "\nStart: \(f.districtA ?? "—")\nCel: \(f.districtB ?? "—")" }
+        if let c = f.corp { s += "\nKorporacja: \(c)" }
         s += "\n\nTo szacunek — kwota na taksometrze zależy od faktycznej trasy i postojów."
         return s
     }
