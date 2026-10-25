@@ -48,7 +48,7 @@ jobs:
           " > drive.txt
           n=0
           while read p; do
-            xcrun simctl location "$UDID" set "$p"
+            xcrun simctl location "$UDID" set "$p" >> shots/sim.log 2>&1 || echo "ERR $p" >> shots/sim.log
             n=$((n+1))
             [ $n -eq 30 ] && xcrun simctl io "$UDID" screenshot shots/3-jazda.png
             [ $n -eq 55 ] && xcrun simctl io "$UDID" screenshot shots/4-przed-skretem.png
@@ -57,6 +57,8 @@ jobs:
           done < drive.txt
           sleep 6
           xcrun simctl io "$UDID" screenshot shots/6-koniec.png
+          cp drive.txt shots/ || true
+          xcrun simctl spawn "$UDID" log show --last 3m --predicate 'process == "TaxiNav" OR subsystem == "com.apple.locationd"' --style compact 2>/dev/null | grep -iE "location|TaxiNav" | tail -200 > shots/log.txt || true
           xcrun simctl spawn "$UDID" launchctl list | grep -i taxinav > shots/running.txt || echo "NIE DZIAŁA" > shots/running.txt
           cp mock.log shots/ || true
           find ~/Library/Logs/DiagnosticReports -name "TaxiNav*" -exec cp {} shots/ \; 2>/dev/null || true
