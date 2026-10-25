@@ -73,17 +73,27 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     var authorized: Bool { [.authorizedAlways, .authorizedWhenInUse].contains(lm.authorizationStatus) }
 
     func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
+        #if DEBUG
+        NSLog("TNAV auth %d", m.authorizationStatus.rawValue)
+        #endif
         onAuthChange?(m.authorizationStatus)
         if authorized { m.startUpdatingLocation() }
     }
 
     func locationManager(_ m: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let l = locations.last, l.horizontalAccuracy >= 0 else { return }
+        #if DEBUG
+        NSLog("TNAV loc %.6f %.6f acc %.0f", l.coordinate.latitude, l.coordinate.longitude, l.horizontalAccuracy)
+        #endif
         last = l
         onLocation?(l)
     }
 
-    func locationManager(_ m: CLLocationManager, didFailWithError error: Error) {}
+    func locationManager(_ m: CLLocationManager, didFailWithError error: Error) {
+        #if DEBUG
+        NSLog("TNAV locerr %@", error.localizedDescription)
+        #endif
+    }
 }
 
 extension CLLocation {
