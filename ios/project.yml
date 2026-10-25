@@ -1,0 +1,52 @@
+# Projekt Xcode generowany przez XcodeGen (w CI na macOS): xcodegen generate
+name: TaxiNav
+options:
+  bundleIdPrefix: pl.taxinav
+  deploymentTarget:
+    iOS: "15.0"
+packages:
+  MapLibre:
+    url: https://github.com/maplibre/maplibre-gl-native-distribution
+    exactVersion: 6.31.0
+targets:
+  TaxiNav:
+    type: application
+    platform: iOS
+    sources:
+      - path: TaxiNav
+    dependencies:
+      - package: MapLibre
+    info:
+      path: TaxiNav/Info.plist
+      properties:
+        CFBundleDisplayName: TaxiNav
+        CFBundleShortVersionString: "0.8.0"
+        CFBundleVersion: "8"
+        LSRequiresIPhoneOS: true
+        UILaunchScreen:
+          UIColorName: ""
+        UIBackgroundModes: [location, audio]
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIUserInterfaceStyle: Dark
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSLocationWhenInUseUsageDescription: "TaxiNav potrzebuje lokalizacji do nawigacji zakręt po zakręcie."
+        NSLocationAlwaysAndWhenInUseUsageDescription: "TaxiNav prowadzi nawigację także przy wygaszonym ekranie."
+        NSMicrophoneUsageDescription: "Mikrofon służy do głosowego wpisywania celu."
+        NSSpeechRecognitionUsageDescription: "Rozpoznawanie mowy zamienia wypowiedziany adres na tekst."
+        NSCameraUsageDescription: "Aparat służy do zeskanowania kodu QR z serwera TaxiNav."
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        CFBundleURLTypes:
+          - CFBundleURLName: pl.taxinav.setup
+            CFBundleURLSchemes: [taxinav]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: pl.taxinav
+        PRODUCT_NAME: TaxiNav
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+        ENABLE_BITCODE: "NO"

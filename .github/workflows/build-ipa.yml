@@ -1,0 +1,56 @@
+name: Build IPA (iPhone)
+
+on:
+  push:
+    branches: [main]
+    paths: ["ios/**", ".github/workflows/build-ipa.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v5
+      - name: Testy rdzenia
+        run: |
+          swiftc -O TaxiNav/Core/*.swift CoreTests/main.swift -o coretests 2>&1 | tee -a build.log; test ${PIPESTATUS[0]} -eq 0
+          ./coretests 2>&1 | tee -a build.log; exit ${PIPESTATUS[0]}
+      - name: XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build (bez podpisu — podpisze AltServer)
+        run: |
+          set -o pipefail
+          xcodebuild -project TaxiNav.xcodeproj -scheme TaxiNav -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee -a build.log | grep -E "error:|warning: .*TaxiNav/|BUILD" || true
+          test -d build/Build/Products/Release-iphoneos/TaxiNav.app
+      - name: Błędy kompilacji jako adnotacje
+        if: failure()
+        run: |
+          grep -E "error:|::error::" build.log | sed 's#.*/ios/##' | sort -u | head -40 | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
+      - name: Pakowanie IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/TaxiNav.app Payload/
+          zip -qr TaxiNav.ipa Payload
+          ls -la TaxiNav.ipa
+          unzip -l TaxiNav.ipa | grep -E "Info.plist|MapLibre|TaxiNav$" | head
+      - name: Publikacja (stały link, osobne wydanie 'ios')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="iPhone: wgraj przez AltServer (Sideload .ipa). Build ${{ github.run_number }}, commit ${{ github.sha }}."
+          if gh release view ios --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload ios TaxiNav.ipa --clobber --repo "${{ github.repository }}"
+            gh release edit ios --notes "$NOTES" --repo "${{ github.repository }}"
+          else
+            gh release create ios TaxiNav.ipa --repo "${{ github.repository }}" --title "TaxiNav iPhone" --notes "$NOTES" --latest=false
+          fi
