@@ -126,3 +126,9 @@ test('API: /style/day.json i /style/night.json bez klucza', async () => {
     assert.equal((await fetch(`${base}/style/x.json`)).status, 401);
   } finally { srv.close(); }
 });
+
+test('adres po współrzędnych (historia tras)', () => {
+  assert.equal(g.addressAt(53.1301, 18.0051).label, 'Gdańska 12');
+  assert.equal(g.addressAt(52.5545, 18.2908).label, 'Dobsko 11');
+  assert.equal(g.addressAt(54.0, 19.0), null);
+});

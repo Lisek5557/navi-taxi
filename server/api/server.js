@@ -8,6 +8,7 @@ import { buildStyle } from './lib/style.js';
 import { openDb } from './lib/db.js';
 import { makeCommunity, REPORT_TYPES } from './lib/community.js';
 import { makeFare, loadZones, DEFAULT_TARIFF, DEFAULT_DISCOUNT_ZONES } from './lib/fare.js';
+import { makeCameras } from './lib/cameras.js';
 
 export function createServer(cfg, deps = {}) {
   const fetchImpl = deps.fetchImpl || fetch;
@@ -40,8 +41,10 @@ export function createServer(cfg, deps = {}) {
     }
     db.save();
   }
+  const cameras = deps.cameras || makeCameras({ file: cfg.camerasFile, pbf: cfg.pbfFile, fetchImpl });
+  if (!deps.cameras && cfg.camerasFile) cameras.startAutoRefresh();
   const router = makeRouter({
-    valhallaUrl: cfg.valhallaUrl, fetchImpl, traffic, community, fare,
+    valhallaUrl: cfg.valhallaUrl, fetchImpl, traffic, community, fare, cameras,
     tolerancePct: cfg.tolerancePct, maxExtraSec: cfg.maxExtraSec,
   });
   const tileCache = new Map(); // "z/x/y" -> {t, buf}
@@ -96,7 +99,7 @@ export function createServer(cfg, deps = {}) {
           const r = await fetchImpl(`${cfg.valhallaUrl}/status`, { signal: AbortSignal.timeout(2000) });
           valhalla = r.ok;
         } catch {}
-        return send(res, 200, { ok: true, valhalla, traffic: !!cfg.tomtomKey, addresses: geocoder ? geocoder.size : 0 });
+        return send(res, 200, { ok: true, valhalla, traffic: !!cfg.tomtomKey, addresses: geocoder ? geocoder.size : 0, cameras: cameras.stats().cameras });
       }
 
       // Styl mapy (publiczny — bez danych prywatnych; kafle i czcionki z OpenFreeMap).
@@ -165,6 +168,18 @@ export function createServer(cfg, deps = {}) {
 
       if (req.method === 'POST' && url.pathname === '/limit/at') {
         return send(res, 200, await router.limitAt((await readJson(req)).points));
+      }
+
+      if (req.method === 'GET' && url.pathname === '/cameras') {
+        const lat = parseFloat(url.searchParams.get('lat')), lon = parseFloat(url.searchParams.get('lon'));
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return send(res, 400, { error: 'Podaj lat/lon' });
+        return send(res, 200, cameras.near(lat, lon, Math.min(60, +(url.searchParams.get('r') || 30))));
+      }
+
+      if (req.method === 'GET' && url.pathname === '/reverse') {
+        const lat = parseFloat(url.searchParams.get('lat')), lon = parseFloat(url.searchParams.get('lon'));
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return send(res, 400, { error: 'Podaj lat/lon' });
+        return send(res, 200, { address: geocoder?.addressAt?.(lat, lon) ?? null, city: geocoder?.cityAt?.(lat, lon) ?? null });
       }
 
       // ----- Wycena kursów: strefy rabatowe i cennik -----
@@ -382,6 +397,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     addressFile: process.env.ADDRESS_FILE || '../data/addresses.tsv',
     dbFile: process.env.DB_FILE || '../data/db.json',
     zonesFile: process.env.ZONES_FILE || '../data/zones.json',
+    camerasFile: process.env.CAMERAS_FILE || '../data/cameras.json',
+    pbfFile: process.env.PBF_FILE || '../valhalla_data/poland-latest.osm.pbf',
     tunnelMetricsUrl: process.env.TUNNEL_METRICS_URL || '',
     tomtomKey: process.env.TOMTOM_API_KEY || '',
     tomtomBase: process.env.TOMTOM_BASE || 'https://api.tomtom.com',

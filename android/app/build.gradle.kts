@@ -11,8 +11,8 @@ android {
         applicationId = "pl.taxinav"
         minSdk = 24
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 8
+        versionName = "0.8.0"
     }
 
     // Stały klucz testowy w repo: każda wersja z GitHuba instaluje się na poprzednią.
@@ -54,6 +54,7 @@ dependencies {
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.car.app:app:1.4.0")
 
     testImplementation("junit:junit:4.13.2")
 }

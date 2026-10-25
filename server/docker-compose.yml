@@ -36,8 +36,11 @@ services:
       - "8080:8080"         # sieć lokalna (Wi-Fi) — do testów bez tunelu
     volumes:
       - ./data:/data        # addresses.tsv — lokalna baza adresów
+      - ./valhalla_data:/osm:ro   # mapa Polski (fotoradary z OSM)
     environment:
       - ADDRESS_FILE=/data/addresses.tsv
+      - CAMERAS_FILE=/data/cameras.json
+      - PBF_FILE=/osm/poland-latest.osm.pbf
       - DB_FILE=/data/db.json
       - TUNNEL_METRICS_URL=http://tunnel:2000
       - VALHALLA_URL=http://valhalla:8002

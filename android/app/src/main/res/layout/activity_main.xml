@@ -45,6 +45,24 @@
                     android:textSize="18sp" />
 
                 <ImageButton
+                    android:id="@+id/micButton"
+                    android:layout_width="48dp"
+                    android:layout_height="56dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Powiedz adres"
+                    android:src="@android:drawable/ic_btn_speak_now"
+                    app:tint="@color/accent" />
+
+                <ImageButton
+                    android:id="@+id/historyButton"
+                    android:layout_width="48dp"
+                    android:layout_height="56dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Historia tras"
+                    android:src="@android:drawable/ic_menu_recent_history"
+                    app:tint="@color/text" />
+
+                <ImageButton
                     android:id="@+id/settingsButton"
                     android:layout_width="56dp"
                     android:layout_height="56dp"

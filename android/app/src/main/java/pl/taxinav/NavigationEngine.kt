@@ -112,6 +112,9 @@ class NavigationEngine(
         return LatLon(pts[i].lat + t * (pts[i + 1].lat - pts[i].lat), pts[i].lon + t * (pts[i + 1].lon - pts[i].lon))
     }
 
+    /** Dystans od początku trasy do punktu kształtu o danym indeksie. */
+    fun alongAt(index: Int): Double = cum[index.coerceIn(0, cum.size - 1)]
+
     /** Pozostała część trasy (do podglądu z góry). */
     fun remainingPoints(fromIndex: Int): List<LatLon> = pts.subList(fromIndex.coerceIn(0, pts.size - 1), pts.size)
 

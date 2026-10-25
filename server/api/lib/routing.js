@@ -113,7 +113,7 @@ export function extractLanes(osrm, points) {
   return out;
 }
 
-export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, tolerancePct, maxExtraSec, community = null, fare = null }) {
+export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, tolerancePct, maxExtraSec, community = null, fare = null, cameras = null }) {
   async function call(path, body, timeout = 15000) {
     const r = await fetchImpl(`${valhallaUrl}${path}`, {
       method: 'POST',
@@ -145,6 +145,9 @@ export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, toleranceP
     }
     c.limits = limits;
     c.lanes = extractLanes(osrm, c.points);
+    const cam = cameras ? cameras.alongRoute(c.points) : { cameras: [], sections: [] };
+    c.cameras = cam.cameras;
+    c.sections = cam.sections;
   }
 
   async function route({ from, to, heading, via = [] }) {
@@ -197,6 +200,8 @@ export function makeRouter({ valhallaUrl, fetchImpl = fetch, traffic, toleranceP
       lanes: c.lanes,
       stops: c.stops,
       fare: c.fare || null,
+      cameras: c.cameras || [],
+      sections: c.sections || [],
     });
     // Trzy warianty do wyboru w aplikacji (indeksy w `routes`; mogą wskazywać tę samą trasę).
     const argmin = (key, tie) => cands.reduce((best, c, i) =>

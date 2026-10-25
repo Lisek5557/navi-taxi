@@ -193,7 +193,22 @@ export function createGeocoder(rows) {
     return best >= 0 ? city[best] : null;
   }
 
-  return { search, cityAt, size: n };
+  /** Najbliższy adres w promieniu ~150 m (do historii tras: „skąd”). */
+  function addressAt(la, lo) {
+    let best = -1, bd = 0.15;
+    const ci = Math.floor(la / 0.02), cj = Math.floor(lo / 0.03);
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+      for (const id of grid.get(`${ci + di},${cj + dj}`) || []) {
+        const d = distKm(la, lo, lat[id], lon[id]);
+        if (d < bd) { bd = d; best = id; }
+      }
+    }
+    if (best < 0) return null;
+    const label = streetN[best] === cityN[best] ? `${city[best]} ${num[best]}` : `${street[best]} ${num[best]}`;
+    return { label, city: city[best], distM: Math.round(bd * 1000) };
+  }
+
+  return { search, cityAt, addressAt, size: n };
 }
 
 export function loadGeocoder(path) {

@@ -38,7 +38,15 @@ data class Route(
     val lanes: List<LaneInfo> = emptyList(),
     val stops: Int = 0,
     val fare: Fare? = null,
+    val cameras: List<Camera> = emptyList(),
+    val sections: List<SpeedSection> = emptyList(),
 )
+
+/** Fotoradar na trasie (idx = punkt kształtu) albo w pobliżu (lat/lon). */
+data class Camera(val idx: Int, val type: String, val maxspeed: Int?, val lat: Double = 0.0, val lon: Double = 0.0)
+
+/** Odcinkowy pomiar prędkości na trasie. */
+data class SpeedSection(val fromIdx: Int, val toIdx: Int, val lengthM: Int, val maxspeed: Int?, val name: String?)
 
 /** Szacowana cena kursu (zasady z kalkulatora taryf). */
 data class Fare(

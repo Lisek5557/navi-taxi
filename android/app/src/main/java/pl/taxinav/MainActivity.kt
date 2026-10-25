@@ -84,6 +84,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import pl.taxinav.car.NavBus
 
 class MainActivity : AppCompatActivity() {
 
@@ -164,6 +165,28 @@ class MainActivity : AppCompatActivity() {
     private var refreshJob: Job? = null
     private var lastNotifAt = 0L
 
+    // Historia tras
+    private var tripStartAt = 0L
+    private var tripFrom: Place? = null
+    private var tripTo: Place? = null
+    private var tripStops: List<Place> = emptyList()
+    private var tripFare: Double? = null
+    private var tripKm = 0.0
+    private var lastTripLoc: Location? = null
+
+    // Głosowe wpisywanie celu
+    private var pendingAutoStart = false
+
+    // Fotoradary i odcinkowe pomiary
+    private val alertedCameras = HashSet<String>()
+    private var nearCameras: List<Camera> = emptyList()
+    private var lastCamerasFetch: LatLon? = null
+    private var sectionActive: SpeedSection? = null
+    private var sectionStartAlong = 0.0
+    private var sectionStartTime = 0L
+    private var sectionWarned = false
+    private var autoStartJob: Job? = null
+
     // Kamera nawigacji
     private var followMode = true
     private var overview = false
@@ -202,6 +225,27 @@ class MainActivity : AppCompatActivity() {
         } else toast(getString(R.string.need_location))
     }
     private val notifLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    private val historyLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val d = res.data ?: return@registerForActivityResult
+        if (res.resultCode != RESULT_OK) return@registerForActivityResult
+        val dest = Place(d.getStringExtra(HistoryActivity.EXTRA_LABEL) ?: "Cel", d.getStringExtra(HistoryActivity.EXTRA_DETAIL) ?: "",
+            d.getDoubleExtra(HistoryActivity.EXTRA_LAT, 0.0), d.getDoubleExtra(HistoryActivity.EXTRA_LON, 0.0))
+        stops.clear()
+        runCatching {
+            val arr = JSONArray(d.getStringExtra(HistoryActivity.EXTRA_STOPS) ?: "[]")
+            for (i in 0 until arr.length()) arr.getJSONObject(i).let { stops += Place(it.getString("label"), "", it.getDouble("lat"), it.getDouble("lon")) }
+        }
+        destPlace = dest
+        destination = LatLon(dest.lat, dest.lon)
+        setSearchText(dest.label)
+        requestRoute(fit = true)
+    }
+
+    private val voiceLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val text = res.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+        if (res.resultCode == RESULT_OK && !text.isNullOrBlank()) onVoiceDestination(text)
+    }
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -251,6 +295,9 @@ class MainActivity : AppCompatActivity() {
         }
         handleExternalIntent(intent)
         startReportsLoop()
+        // Android Auto: wybór celu i zatrzymanie z ekranu samochodu.
+        NavBus.requestDestination = { p -> runOnUiThread { pendingAutoStart = true; Prefs.addRecent(this, p); pickPlace(p) } }
+        NavBus.requestStop = { runOnUiThread { if (navigating) stopNavigation() } }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -317,12 +364,13 @@ class MainActivity : AppCompatActivity() {
         }
         gmapsButton.setOnClickListener { openInGoogleMaps() }
         addStopButton.setOnClickListener {
+            cancelAutoStart()
             addingStop = true
             toast("Wyszukaj albo przytrzymaj palec na mapie — dodam przystanek przed celem")
             searchInput.requestFocus()
             (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(searchInput, 0)
         }
-        editStopsButton.setOnClickListener { editStops() }
+        editStopsButton.setOnClickListener { cancelAutoStart(); editStops() }
         findViewById<MaterialButton>(R.id.reportButton).setOnClickListener { reportDialog() }
         speedLimitView.setOnClickListener { reportLimitDialog() }
         currentSpeedView.setOnClickListener { reportLimitDialog() }
@@ -346,6 +394,10 @@ class MainActivity : AppCompatActivity() {
         })
         searchInput.setOnFocusChangeListener { _, hasFocus ->
             if (hasFocus && searchInput.text.isNullOrBlank()) showRecent()
+        }
+        findViewById<ImageButton>(R.id.micButton).setOnClickListener { startVoiceInput() }
+        findViewById<ImageButton>(R.id.historyButton).setOnClickListener {
+            historyLauncher.launch(Intent(this, HistoryActivity::class.java))
         }
         findViewById<ImageButton>(R.id.settingsButton).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -429,6 +481,16 @@ class MainActivity : AppCompatActivity() {
         for ((type, v) in REPORT_ICONS) s.addImage("rep-$type", iconBitmap(v.first, v.second))
         for (i in 1..9) s.addImage("stop-$i", iconBitmap("$i", 0xFF1B6B3A.toInt()))
         s.addImage("stop-dest", iconBitmap("🏁", 0xFF1B6B3A.toInt()))
+        s.addImage("cam-fixed", iconBitmap("📷", 0xFF212121.toInt()))
+        s.addImage("cam-red_light", iconBitmap("🚦", 0xFF212121.toInt()))
+        s.addImage("cam-section", iconBitmap("⏱", 0xFF6A1B9A.toInt()))
+        s.addSource(GeoJsonSource("cameras-src"))
+        s.addLayer(SymbolLayer("cameras-layer", "cameras-src").withProperties(
+            PropertyFactory.iconImage(Expression.get("icon")),
+            PropertyFactory.iconAllowOverlap(true),
+            PropertyFactory.iconSize(Expression.interpolate(Expression.linear(), Expression.zoom(),
+                Expression.stop(11, 0.5f), Expression.stop(16, 0.9f))),
+        ).withProperties(PropertyFactory.visibility(Property.VISIBLE)))
         s.addLayer(SymbolLayer("stops-layer", "stops-src").withProperties(
             PropertyFactory.iconImage(Expression.get("icon")),
             PropertyFactory.iconAllowOverlap(true),
@@ -443,6 +505,7 @@ class MainActivity : AppCompatActivity() {
         updateTrafficLayer(s)
         drawReports()
         drawStops()
+        drawCameras()
         loadDiscountZones()
     }
 
@@ -519,6 +582,23 @@ class MainActivity : AppCompatActivity() {
         }
         altSrc?.setGeoJson(FeatureCollection.fromFeatures(alts))
         drawStops()
+        drawCameras()
+    }
+
+    /** Ikony fotoradarów: z trasy (gdy jest) albo z okolicy. */
+    private fun drawCameras() {
+        val src = style?.getSourceAs<GeoJsonSource>("cameras-src") ?: return
+        val r = routeResp?.chosen
+        val f = ArrayList<Feature>()
+        if (r != null) {
+            r.cameras.forEach { c -> r.points.getOrNull(c.idx)?.let { p ->
+                f += Feature.fromGeometry(Point.fromLngLat(p.lon, p.lat)).also { it.addStringProperty("icon", "cam-${if (c.type == "red_light") "red_light" else "fixed"}") } } }
+            r.sections.forEach { s -> listOf(s.fromIdx, s.toIdx).forEach { i -> r.points.getOrNull(i)?.let { p ->
+                f += Feature.fromGeometry(Point.fromLngLat(p.lon, p.lat)).also { it.addStringProperty("icon", "cam-section") } } } }
+        } else nearCameras.forEach { c ->
+            f += Feature.fromGeometry(Point.fromLngLat(c.lon, c.lat)).also { it.addStringProperty("icon", "cam-${if (c.type == "red_light") "red_light" else "fixed"}") }
+        }
+        src.setGeoJson(FeatureCollection.fromFeatures(f))
     }
 
     private fun drawStops() {
@@ -594,6 +674,8 @@ class MainActivity : AppCompatActivity() {
             reloadStyleIfNeeded() // automatyczne przełączenie dzień/noc
         }
         map?.locationComponent?.takeIf { it.isLocationComponentActivated }?.forceLocationUpdate(loc)
+        NavBus.location = loc
+        if (!navigating) NavBus.publish()
         if (first) pendingPlace?.let { pendingPlace = null; pickPlace(it) }
         collectSpeedSample(loc)
         recentPts.addLast(pos)
@@ -601,11 +683,17 @@ class MainActivity : AppCompatActivity() {
 
         val e = engine
         if (navigating && e != null) {
+            if (loc.accuracy < 30) {
+                lastTripLoc?.let { tripKm += it.distanceTo(loc) / 1000.0 }
+                lastTripLoc = loc
+            }
             val st = e.update(pos, loc.speed.toDouble(), loc.accuracy.toDouble())
             lastNavState = st
             renderNavState(st)
+            NavBus.state = st; NavBus.route = e.route; NavBus.navigating = true; NavBus.publish()
             updateNavCamera(loc, st, e)
             checkReportsOnRoute(e, st)
+            checkCamerasOnRoute(e, st, loc)
             updateSpeed(loc, st.speedLimit)
             if (st.arrived) {
                 stopNavigation(arrived = true)
@@ -617,6 +705,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             pollFreeLimit(loc)
             checkReportsAhead(loc)
+            checkCamerasAhead(loc)
             updateSpeed(loc, freeLimit)
         }
     }
@@ -791,6 +880,87 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- Fotoradary i odcinkowy pomiar ----------
+
+    private fun camWarnDistance(kmh: Double) = if (kmh > 70) 900.0 else 500.0
+
+    private fun camLabel(c: Camera) = (if (c.type == "red_light") "Fotoradar na światłach" else "Fotoradar") +
+        (c.maxspeed?.let { ", ograniczenie $it" } ?: "")
+
+    private fun checkCamerasOnRoute(e: NavigationEngine, st: NavState, loc: Location) {
+        val r = e.route
+        val kmh = if (loc.hasSpeed()) loc.speed * 3.6 else 0.0
+        for (c in r.cameras) {
+            val ahead = e.alongAt(c.idx) - st.alongM
+            val key = "r${c.idx}-${r.distanceM}"
+            if (ahead in 0.0..camWarnDistance(kmh) && key !in alertedCameras) {
+                alertedCameras += key
+                tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 200)
+                voice.say("${camLabel(c)}, ${Speech.inDistance(ahead).replaceFirstChar { it.lowercase() }}.")
+            }
+        }
+        // Odcinkowy pomiar: zapowiedź, średnia prędkość na odcinku, koniec.
+        val active = sectionActive
+        if (active == null) {
+            for (s in r.sections) {
+                val toStart = e.alongAt(s.fromIdx) - st.alongM
+                val key = "s${s.fromIdx}-${r.distanceM}"
+                if (toStart in 0.0..camWarnDistance(kmh) && key !in alertedCameras) {
+                    alertedCameras += key
+                    voice.say("Odcinkowy pomiar prędkości, ${Speech.inDistance(toStart).replaceFirstChar { it.lowercase() }}" +
+                        (s.maxspeed?.let { ", ograniczenie $it" } ?: "") + ".")
+                }
+                if (st.alongM >= e.alongAt(s.fromIdx) && st.alongM < e.alongAt(s.toIdx)) {
+                    sectionActive = s; sectionStartAlong = st.alongM; sectionStartTime = SystemClock.elapsedRealtime(); sectionWarned = false
+                    voice.say("Początek odcinkowego pomiaru.")
+                    break
+                }
+            }
+        } else {
+            val doneM = st.alongM - sectionStartAlong
+            val secs = (SystemClock.elapsedRealtime() - sectionStartTime) / 1000.0
+            val avg = if (secs > 5) doneM / secs * 3.6 else 0.0
+            val left = e.alongAt(active.toIdx) - st.alongM
+            val lim = active.maxspeed
+            summaryDetail.text = "⏱ Odcinek: śr. ${avg.toInt()} km/h" + (lim?.let { " / $it" } ?: "") + " · do końca ${Speech.short(maxOf(0.0, left))}"
+            if (lim != null && avg > lim + 3 && secs > 20 && !sectionWarned) {
+                sectionWarned = true
+                tone?.startTone(ToneGenerator.TONE_PROP_BEEP2, 300)
+                voice.say("Średnia prędkość na odcinku za wysoka, zwolnij.")
+            }
+            if (left <= 0 || st.offRoute) {
+                voice.say("Koniec odcinkowego pomiaru" + if (lim != null && avg > 0) ", średnia ${avg.toInt()}." else ".")
+                sectionActive = null
+            }
+        }
+    }
+
+    /** Bez trasy: fotoradary z okolicy (pobierane co ~10 km), ostrzeżenie gdy są na wprost. */
+    private fun checkCamerasAhead(loc: Location) {
+        val me = LatLon(loc.latitude, loc.longitude)
+        val last = lastCamerasFetch
+        if ((last == null || Geo.distance(last, me) > 10_000) && Prefs.server(this).isNotBlank()) {
+            lastCamerasFetch = me
+            lifecycleScope.launch {
+                runCatching { Api.from(this@MainActivity).camerasNear(me) }.getOrNull()?.let { nearCameras = it; if (routeResp == null) drawCameras() }
+            }
+        }
+        if (!loc.hasBearing() || loc.speed < 5f) return
+        val kmh = loc.speed * 3.6
+        for (c in nearCameras) {
+            val p = LatLon(c.lat, c.lon)
+            val d = Geo.distance(me, p)
+            val diff = abs(((bearingTo(me, p) - loc.bearing + 540) % 360) - 180)
+            val key = "n${c.lat},${c.lon}"
+            if (d < camWarnDistance(kmh) && diff < 25 && key !in alertedCameras) {
+                alertedCameras += key
+                tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 200)
+                voice.say("${camLabel(c)}, ${Speech.inDistance(d).replaceFirstChar { it.lowercase() }}.")
+            }
+            if (d > 2000) alertedCameras -= key   // po oddaleniu można ostrzec ponownie
+        }
+    }
+
     // ---------- Próbki prędkości (anonimowe korki od kierowców) ----------
 
     private fun collectSpeedSample(loc: Location) {
@@ -894,6 +1064,7 @@ class MainActivity : AppCompatActivity() {
                 drawRoute(resp)
                 if (fit) fitRoute(resp.chosen)
                 showPreview(resp)
+                if (pendingAutoStart) { pendingAutoStart = false; startCountdown(resp.chosen) }
             } catch (e: ApiException) {
                 toast(e.message ?: "Błąd")
             } finally {
@@ -952,6 +1123,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectRouteMode(mode: String) {
+        cancelAutoStart()
         routeMode = mode
         Prefs.setRouteMode(this, mode)
         val resp = routeResp?.withMode(mode) ?: return
@@ -1018,6 +1190,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun clearRoute() {
+        cancelAutoStart()
         routeResp = null; destination = null; destPlace = null; engine = null
         stops.clear(); addingStop = false
         drawRoute(null)
@@ -1124,13 +1297,98 @@ class MainActivity : AppCompatActivity() {
         cur
     }
 
+    // ---------- Historia tras ----------
+
+    private fun beginTrip(r: Route) {
+        val loc = lastLocation
+        tripStartAt = System.currentTimeMillis()
+        tripKm = 0.0
+        lastTripLoc = loc
+        tripTo = destPlace
+        tripStops = stops.toList()
+        tripFare = r.fare?.shown
+        val from = loc?.let { Place("Start", "", it.latitude, it.longitude) }
+        tripFrom = from
+        if (from != null) lifecycleScope.launch {
+            runCatching { Api.from(this@MainActivity).reverse(LatLon(from.lat, from.lon)) }.getOrNull()?.let { tripFrom = from.copy(label = it) }
+        }
+    }
+
+    private fun saveTrip(arrived: Boolean) {
+        val from = tripFrom; val to = tripTo
+        if (tripStartAt > 0 && from != null && to != null && tripKm > 0.2) {
+            TripHistory.add(this, Trip(from, to, tripStops, tripStartAt, System.currentTimeMillis(), tripKm, tripFare, arrived))
+        }
+        tripStartAt = 0
+    }
+
+    // ---------- Głosowe wpisywanie celu ----------
+
+    private fun startVoiceInput() {
+        val i = Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "pl-PL")
+            .putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Dokąd jedziemy? Np. „Gdańska 12”")
+        try { voiceLauncher.launch(i) } catch (_: Exception) { toast("Brak rozpoznawania mowy na tym telefonie (zainstaluj aplikację Google)") }
+    }
+
+    /** „jedź do Gdańska 12” -> pierwszy wynik -> trasa -> automatyczny start za 5 s (można anulować). */
+    private fun onVoiceDestination(raw: String) {
+        val q = raw.trim().replace(Regex("^(jedź|jedziemy|nawiguj|prowadź|zawieź( mnie)?|kurs)\\s+", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("^(do|na|pod)\\s+", RegexOption.IGNORE_CASE), "")
+        setSearchText(q)
+        lifecycleScope.launch {
+            try {
+                val near = lastLocation?.let { LatLon(it.latitude, it.longitude) }
+                val found = Api.from(this@MainActivity).geocode(q, near)
+                if (found.isEmpty()) {
+                    voice.say("Nie znalazłem adresu $q.")
+                    toast("Nie znaleziono: $q")
+                    return@launch
+                }
+                val top = found.first()
+                Prefs.addRecent(this@MainActivity, top)
+                setSearchText(top.label)
+                pendingAutoStart = true
+                pickPlace(top)
+            } catch (e: ApiException) { toast(e.message ?: "Błąd") }
+        }
+    }
+
+    private fun startCountdown(r: Route) {
+        voice.say("Trasa do ${destPlace?.label ?: "celu"}, ${minutes(r.trafficTimeS)}. Ruszam za 5 sekund.")
+        autoStartJob?.cancel()
+        autoStartJob = lifecycleScope.launch {
+            for (i in 5 downTo 1) {
+                startButton.text = "START ($i)"
+                delay(1000)
+            }
+            if (!navigating && routeResp != null) startNavigation()
+        }
+    }
+
+    private fun cancelAutoStart() {
+        if (autoStartJob?.isActive == true) {
+            autoStartJob?.cancel()
+            startButton.text = getString(R.string.start)
+        }
+        pendingAutoStart = false
+    }
+
     // ---------- Nawigacja ----------
 
     @SuppressLint("MissingPermission")
     private fun startNavigation() {
         val resp = routeResp ?: return
+        cancelAutoStart()
         navigating = true
         alertedReports.clear()
+        alertedCameras.clear()
+        sectionActive = null
+        // Wpisany adres znika po starcie (cel jest w banerze i na mapie).
+        setSearchText("")
+        hideKeyboard()
+        beginTrip(resp.chosen)
         engine = NavigationEngine(resp.chosen, voice::say)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         searchPanel.visibility = View.GONE
@@ -1163,7 +1421,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopNavigation(arrived: Boolean = false) {
+        saveTrip(arrived)
         navigating = false
+        NavBus.navigating = false; NavBus.state = null; NavBus.publish()
         refreshJob?.cancel()
         runCatching { NavService.stop(this) }
         updatePipParams()
@@ -1408,6 +1668,7 @@ class MainActivity : AppCompatActivity() {
     private fun loadStyle(url: String) {
         val m = map ?: return
         loadedStyleUrl = url
+        NavBus.styleUrl = url
         m.setStyle(Style.Builder().fromUri(url)) { s ->
             style = s
             setupLayers(s)
@@ -1431,6 +1692,10 @@ class MainActivity : AppCompatActivity() {
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); mapView.onSaveInstanceState(outState) }
     override fun onDestroy() {
+        NavBus.requestDestination = null
+        NavBus.requestStop = null
+        NavBus.navigating = false
+        NavBus.publish()
         fused.removeLocationUpdates(locationCallback)
         if (navigating) runCatching { NavService.stop(this) }
         voice.shutdown()

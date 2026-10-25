@@ -159,6 +159,20 @@ class Api(private val server: String, private val key: String, private val userT
         if (j.isNull("limit")) null else j.getInt("limit")
     }
 
+    /** Fotoradary w promieniu ~30 km (ostrzeżenia bez wyznaczonej trasy). */
+    suspend fun camerasNear(p: LatLon): List<Camera> = withContext(Dispatchers.IO) {
+        val arr = JSONObject(request("GET", "/cameras?lat=${p.lat}&lon=${p.lon}&r=30", null)).optJSONArray("cameras") ?: JSONArray()
+        (0 until arr.length()).map { i -> arr.getJSONObject(i).let { c ->
+            Camera(-1, c.optString("type", "fixed"), if (c.isNull("maxspeed")) null else c.optInt("maxspeed"), c.getDouble("lat"), c.getDouble("lon")) } }
+    }
+
+    /** Najbliższy adres (do historii tras: „skąd”). */
+    suspend fun reverse(p: LatLon): String? = withContext(Dispatchers.IO) {
+        val j = JSONObject(request("GET", "/reverse?lat=${p.lat}&lon=${p.lon}", null))
+        val a = j.optJSONObject("address")
+        a?.optString("label")?.takeIf { it.isNotBlank() } ?: j.optString("city").takeIf { it.isNotBlank() && it != "null" }
+    }
+
     /** Strefy rabatowe (GeoJSON) do pokazania na mapie. */
     suspend fun discountZones(): String = withContext(Dispatchers.IO) { request("GET", "/fare/zones", null) }
 
@@ -251,6 +265,15 @@ class Api(private val server: String, private val key: String, private val userT
                     })
                 },
                 stops = o.optInt("stops"),
+                cameras = (o.optJSONArray("cameras") ?: JSONArray()).let { arr ->
+                    (0 until arr.length()).map { i -> arr.getJSONObject(i).let { c ->
+                        Camera(c.getInt("idx"), c.optString("type", "fixed"), if (c.isNull("maxspeed")) null else c.optInt("maxspeed")) } }
+                },
+                sections = (o.optJSONArray("sections") ?: JSONArray()).let { arr ->
+                    (0 until arr.length()).map { i -> arr.getJSONObject(i).let { c ->
+                        SpeedSection(c.getInt("fromIdx"), c.getInt("toIdx"), c.optInt("lengthM"),
+                            if (c.isNull("maxspeed")) null else c.optInt("maxspeed"), c.optString("name").takeIf { it.isNotBlank() && it != "null" }) } }
+                },
                 fare = o.optJSONObject("fare")?.let { f ->
                     val flat = f.optJSONObject("flat")
                     Fare(
