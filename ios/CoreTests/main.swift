@@ -1,4 +1,4 @@
-// Testy rdzenia (bez symulatora): swiftc TaxiNav/Core/*.swift CoreTests/main.swift -o coretests && ./coretests
+// Testy rdzenia (bez symulatora): swiftc TaxiNav/Core/*.swift CoreTests/main.swift -o core-tests.bin && ./core-tests.bin
 import Foundation
 
 var failures = 0

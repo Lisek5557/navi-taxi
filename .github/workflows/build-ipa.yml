@@ -19,8 +19,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Testy rdzenia
         run: |
-          swiftc -O TaxiNav/Core/*.swift CoreTests/main.swift -o coretests 2>&1 | tee -a build.log; test ${PIPESTATUS[0]} -eq 0
-          ./coretests 2>&1 | tee -a build.log; exit ${PIPESTATUS[0]}
+          swiftc -O TaxiNav/Core/*.swift CoreTests/main.swift -o core-tests.bin 2>&1 | tee -a build.log; test ${PIPESTATUS[0]} -eq 0
+          ./core-tests.bin 2>&1 | tee -a build.log; exit ${PIPESTATUS[0]}
       - name: XcodeGen
         run: |
           brew install xcodegen
@@ -35,7 +35,7 @@ jobs:
       - name: Błędy kompilacji jako adnotacje
         if: failure()
         run: |
-          grep -E "error:|::error::" build.log | sed 's#.*/ios/##' | sort -u | head -40 | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
+          grep -E "error:|::error::|Undefined|ld: " build.log | sed 's#.*/ios/##' | sort -u | head -40 | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
       - name: Pakowanie IPA
         run: |
           mkdir -p Payload

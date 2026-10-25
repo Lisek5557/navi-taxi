@@ -5,5 +5,5 @@ ios/build/
 ios/*.xcodeproj/
 ios/Payload/
 ios/*.ipa
-ios/coretests
+ios/core-tests.bin
 ios/build.log
