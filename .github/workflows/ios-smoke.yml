@@ -58,7 +58,7 @@ jobs:
           sleep 6
           xcrun simctl io "$UDID" screenshot shots/6-koniec.png
           cp drive.txt shots/ || true
-          xcrun simctl spawn "$UDID" log show --last 3m --predicate 'eventMessage CONTAINS "TNAV"' --style compact 2>/dev/null | tail -150 > shots/log.txt || true
+          xcrun simctl spawn "$UDID" log show --last 15m --predicate 'process == "TaxiNav"' --style compact 2>/dev/null | grep -E 'TNAV|ocation' | tail -150 > shots/log.txt || true
           echo ok >> shots/sim.log
           xcrun simctl spawn "$UDID" launchctl list | grep -i taxinav > shots/running.txt || echo "NIE DZIAŁA" > shots/running.txt
           cp mock.log shots/ || true
