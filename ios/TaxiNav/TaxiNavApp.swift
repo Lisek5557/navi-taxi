@@ -10,7 +10,7 @@ struct TaxiNavApp: App {
                 .environmentObject(model)
                 // Kod QR z serwera zeskanowany zwykłym aparatem: taxinav://setup?s=...&k=...
                 .onOpenURL { url in
-                    if !model.applySetup(url.absoluteString) { model.show("Nieprawidłowy kod konfiguracji") }
+                    if !model.handleURL(url) { model.show("Nieprawidłowy link TaxiNav") }
                 }
         }
     }

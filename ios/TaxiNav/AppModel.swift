@@ -111,6 +111,13 @@ final class AppModel: ObservableObject {
         map.setStyle(desiredStyleURL())
         location.start()
         startReportsLoop()
+        // Test na symulatorze: xcrun simctl launch ... -openURL "taxinav://navigate?..."
+        if let s = UserDefaults.standard.string(forKey: "openURL"), let u = URL(string: s) {
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                self?.handleURL(u)
+            }
+        }
     }
 
     // MARK: - Styl mapy
@@ -178,6 +185,30 @@ final class AppModel: ObservableObject {
         settingsChanged()
         show("Zapisano ustawienia z kodu QR")
         return true
+    }
+
+    /// Linki taxinav:// — konfiguracja z QR albo cel z innej aplikacji / Skrótów:
+    /// taxinav://navigate?lat=53.12&lon=18.00&label=Dworzec[&start=1]  lub  taxinav://navigate?q=Gdańska%2012
+    @discardableResult
+    func handleURL(_ url: URL) -> Bool {
+        guard url.scheme == "taxinav" else { return false }
+        if url.host == "setup" { return applySetup(url.absoluteString) }
+        guard url.host == "navigate", let c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
+        func q(_ n: String) -> String? { c.queryItems?.first { $0.name == n }?.value }
+        if let la = q("lat").flatMap(Double.init), let lo = q("lon").flatMap(Double.init) {
+            if navigating { stopNavigation() }
+            resp = nil
+            stops = []
+            if q("start") == "1" { pendingAutoStart = true }
+            pick(Place(label: q("label") ?? "Cel z linku", detail: "", lat: la, lon: lo))
+            return true
+        }
+        if let text = q("q"), !text.isEmpty {
+            searchText = text
+            search()
+            return true
+        }
+        return false
     }
 
     // MARK: - Lokalizacja

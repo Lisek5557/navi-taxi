@@ -20,7 +20,11 @@ jobs:
           xcodegen generate
           xcodebuild -project TaxiNav.xcodeproj -scheme TaxiNav -configuration Debug -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -5
-      - name: Uruchomienie i zrzuty ekranu
+      - name: Serwer testowy
+        run: |
+          nohup node ci/mock-server.mjs > mock.log 2>&1 &
+          sleep 5; curl -s localhost:8080/health
+      - name: Jazda testowa i zrzuty ekranu
         run: |
           set -x
           UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];print(next(x['udid'] for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone 16')))")
@@ -28,22 +32,30 @@ jobs:
           xcrun simctl bootstatus "$UDID" -b
           xcrun simctl install "$UDID" build/Build/Products/Debug-iphonesimulator/TaxiNav.app
           xcrun simctl privacy "$UDID" grant location pl.taxinav || true
-          xcrun simctl location "$UDID" set 53.1235,18.0084 || true
+          xcrun simctl privacy "$UDID" grant location-always pl.taxinav || true
+          xcrun simctl location "$UDID" set 53.1235,18.0084
           mkdir -p shots
-          xcrun simctl launch "$UDID" pl.taxinav
-          sleep 25
-          xcrun simctl io "$UDID" screenshot shots/1-start.png
-          xcrun simctl openurl "$UDID" "taxinav://setup?s=https://example.com&k=test"
+          xcrun simctl launch "$UDID" pl.taxinav -server http://localhost:8080 -key sekret \
+            -openURL "taxinav://navigate?lat=53.1289&lon=18.0204&label=Dworzec&start=1"
+          sleep 9
+          xcrun simctl io "$UDID" screenshot shots/1-podglad.png
           sleep 8
-          xcrun simctl io "$UDID" screenshot shots/2-setup.png
-          xcrun simctl ui "$UDID" appearance dark || true
-          sleep 3
+          xcrun simctl io "$UDID" screenshot shots/2-start.png
+          xcrun simctl location "$UDID" start --speed=14 --interval=1 53.1235,18.0084 53.1235,18.0204 53.1289,18.0204 &
+          sleep 30
+          xcrun simctl io "$UDID" screenshot shots/3-jazda.png
+          sleep 35
+          xcrun simctl io "$UDID" screenshot shots/4-po-skrecie.png
+          sleep 40
+          xcrun simctl io "$UDID" screenshot shots/5-koniec.png
           xcrun simctl spawn "$UDID" launchctl list | grep -i taxinav > shots/running.txt || echo "NIE DZIAŁA" > shots/running.txt
+          cp mock.log shots/ || true
           find ~/Library/Logs/DiagnosticReports -name "TaxiNav*" -exec cp {} shots/ \; 2>/dev/null || true
           ls -la shots; cat shots/running.txt
       - name: Publikacja zrzutów (szkic wydania)
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete ios-smoke --yes --cleanup-tag --repo "${{ github.repository }}" 2>/dev/null || true
+          for id in $(gh api repos/${{ github.repository }}/releases --jq '.[] | select(.name=="iOS smoke") | .id'); do gh api -X DELETE repos/${{ github.repository }}/releases/$id; done
           gh release create ios-smoke shots/* --draft --title "iOS smoke" --notes "zrzuty z symulatora" --repo "${{ github.repository }}"
