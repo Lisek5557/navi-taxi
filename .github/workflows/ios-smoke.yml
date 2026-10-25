@@ -41,13 +41,22 @@ jobs:
           xcrun simctl io "$UDID" screenshot shots/1-podglad.png
           sleep 8
           xcrun simctl io "$UDID" screenshot shots/2-start.png
-          xcrun simctl location "$UDID" start --speed=14 --interval=1 53.1235,18.0084 53.1235,18.0204 53.1289,18.0204 &
-          sleep 30
-          xcrun simctl io "$UDID" screenshot shots/3-jazda.png
-          sleep 35
-          xcrun simctl io "$UDID" screenshot shots/4-po-skrecie.png
-          sleep 40
-          xcrun simctl io "$UDID" screenshot shots/5-koniec.png
+          # Jazda ~50 km/h: co sekundę nowa pozycja wzdłuż trasy (800 m na wschód, potem 600 m na północ).
+          python3 -c "
+          for i in range(58): print('53.1235,%.6f' % (18.0084 + 0.012 * i / 57))
+          for i in range(1, 44): print('%.6f,18.0204' % (53.1235 + 0.0054 * i / 43))
+          " > drive.txt
+          n=0
+          while read p; do
+            xcrun simctl location "$UDID" set "$p"
+            n=$((n+1))
+            [ $n -eq 30 ] && xcrun simctl io "$UDID" screenshot shots/3-jazda.png
+            [ $n -eq 55 ] && xcrun simctl io "$UDID" screenshot shots/4-przed-skretem.png
+            [ $n -eq 75 ] && xcrun simctl io "$UDID" screenshot shots/5-po-skrecie.png
+            sleep 1
+          done < drive.txt
+          sleep 6
+          xcrun simctl io "$UDID" screenshot shots/6-koniec.png
           xcrun simctl spawn "$UDID" launchctl list | grep -i taxinav > shots/running.txt || echo "NIE DZIAŁA" > shots/running.txt
           cp mock.log shots/ || true
           find ~/Library/Logs/DiagnosticReports -name "TaxiNav*" -exec cp {} shots/ \; 2>/dev/null || true
